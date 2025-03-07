@@ -22,7 +22,7 @@ app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
 # Update the CORS configuration for better compatibility
 CORS(app, 
      supports_credentials=True, 
-     origins=["http://localhost:8000", "https://yusystem.onrender.com"],
+     origins=["http://localhost:8000", "https://render-authentication-project.onrender.com"],
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "OPTIONS"]
 )
@@ -115,7 +115,7 @@ def verify():
 
     # Check RP ID hash
     rp_id_hash = auth_data[:32]
-    expected_rp_id_hash = hashlib.sha256(b"yusystem.onrender.com").digest()
+    expected_rp_id_hash = hashlib.sha256(b"render-authentication-project.onrender.com").digest()
     
     if rp_id_hash != expected_rp_id_hash:
         return jsonify({"error": "RP ID hash mismatch"}), 403
@@ -558,7 +558,7 @@ def webauthn_register_options():
         "challenge": challenge,
         "rp": {
             "name": "YubiKey Chat System",
-            "id": "yusystem.onrender.com"
+            "id": "render-authentication-project.onrender.com"
         },
         "user": {
             "id": user_id_b64,
@@ -606,7 +606,7 @@ def webauthn_register_complete():
             return jsonify({"error": "Incorrect request type"}), 400
         
         # Verify origin
-        if not client_data.get('origin', '').endswith('yusystem.onrender.com'):
+        if not client_data.get('origin', '').endswith('render-authentication-project.onrender.com'):
             print(f"❌ Origin mismatch: {client_data.get('origin')}")
             return jsonify({"error": "Origin verification failed"}), 400
             
@@ -697,7 +697,7 @@ def webauthn_login_options():
         return jsonify({
             "challenge": challenge,
             "timeout": 60000,
-            "rpId": "yusystem.onrender.com",
+            "rpId": "render-authentication-project.onrender.com",
             "allowCredentials": allowed_credentials,
             "userVerification": "discouraged"
         })
@@ -746,7 +746,7 @@ def webauthn_login_complete():
             return jsonify({"error": "Incorrect request type"}), 400
         
         # Verify origin
-        if not client_data.get('origin', '').endswith('yusystem.onrender.com'):
+        if not client_data.get('origin', '').endswith('render-authentication-project.onrender.com'):
             print(f"❌ Origin mismatch: {client_data.get('origin')}")
             return jsonify({"error": "Origin verification failed"}), 400
         

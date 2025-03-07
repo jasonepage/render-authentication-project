@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: yubikey-auth
+    name: render-authentication-project
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app

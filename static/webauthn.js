@@ -71,7 +71,7 @@ const webAuthn = {
                 challenge: this.base64urlToArrayBuffer(optionsJson.challenge),
                 rp: {
                     name: 'YubiKey Chat System',
-                    id: 'yusystem.onrender.com'
+                    id: 'render-authentication-project.onrender.com'
                 },
                 user: {
                     id: this.base64urlToArrayBuffer(optionsJson.user.id),
@@ -154,7 +154,7 @@ const webAuthn = {
             // 3. Prepare options for the browser's WebAuthn API
             const publicKeyOptions = {
                 challenge: this.base64urlToArrayBuffer(optionsJson.challenge),
-                rpId: 'yusystem.onrender.com',
+                rpId: 'render-authentication-project.onrender.com',
                 timeout: 60000,
                 userVerification: 'discouraged'
             };

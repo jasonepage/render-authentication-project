@@ -1,7 +1,7 @@
 // Chat functionality
 const chat = {
     // Server URL (same as in webauthn.js)
-    SERVER_URL: 'https://yusystem.onrender.com',
+    SERVER_URL: 'https://render-authentication-project.onrender.com',
     
     // Message polling interval in ms
     POLLING_INTERVAL: 3000,
