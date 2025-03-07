@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YubiKey Chat System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>YubiKey Chat</h1>
+            <div class="auth-status">
+                <span id="status-message">Not authenticated</span>
+                <button id="register-button" class="action-button">Register YubiKey</button>
+                <button id="login-button" class="action-button">Login with YubiKey</button>
+                <button id="logout-button" class="action-button hidden">Logout</button>
+            </div>
+        </header>
+
+        <main>
+            <div class="chat-container">
+                <div id="messages" class="messages">
+                    <!-- Messages will be displayed here -->
+                    <div class="message-loading">Loading messages...</div>
+                </div>
+
+                <div class="input-container">
+                    <input type="text" id="message-input" placeholder="Type a message..." disabled>
+                    <button id="send-button" disabled>Send</button>
+                </div>
+            </div>
+        </main>
+
+        <div id="modal" class="modal hidden">
+            <div class="modal-content">
+                <span id="modal-message">Touch your YubiKey...</span>
+                <div class="yubikey-animation">
+                    <div class="yubikey"></div>
+                    <div class="touch-prompt">Touch</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="webauthn.js"></script>
+    <script src="chat.js"></script>
+</body>
+</html> 
