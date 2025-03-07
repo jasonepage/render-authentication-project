@@ -13,6 +13,9 @@ import base64
 from flask_cors import CORS
 import time
 from functools import wraps
+import sys
+import platform
+import datetime
 
 app = Flask(__name__)
 
@@ -837,6 +840,40 @@ def serve_webauthn_js():
 @app.route('/chat.js')
 def serve_chat_js():
     return send_from_directory('static', 'chat.js')
+
+@app.route('/debug')
+def debug_dashboard():
+    """Simple debug dashboard showing basic system status"""
+    try:
+        # Basic system info
+        debug_info = {
+            "status": "healthy",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "environment": app.env,
+            "database_path": os.environ.get('DATABASE_PATH', 'yubikeys.db')
+        }
+        
+        # Database stats
+        conn = sqlite3.connect(os.environ.get('DATABASE_PATH', 'yubikeys.db'))
+        c = conn.cursor()
+        
+        c.execute("SELECT COUNT(*) FROM yubikeys")
+        debug_info["registered_yubikeys"] = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM messages")
+        debug_info["total_messages"] = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
+        debug_info["unique_users"] = c.fetchone()[0]
+        
+        conn.close()
+        return jsonify(debug_info)
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     import os
