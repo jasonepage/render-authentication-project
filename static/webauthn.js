@@ -122,7 +122,7 @@ const webAuthn = {
             this.hideModal();
             
             // Auto-login after successful registration
-            await this.loginWithiKey();
+            await this.loginWithKey();
             
             return result;
         } catch (error) {
