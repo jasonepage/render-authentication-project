@@ -95,6 +95,8 @@ def init_db():
         
         # Create security_keys table
         print("Creating security_keys table...")
+        # Drop the table if it exists to refresh the schema
+        c.execute("DROP TABLE IF EXISTS security_keys")
         c.execute('''
             CREATE TABLE IF NOT EXISTS security_keys (
                 credential_id TEXT PRIMARY KEY,
@@ -788,7 +790,11 @@ def webauthn_register_complete():
         
         # Connect to the database
         try:
-            conn = sqlite3.connect('webauthn.db')
+            # Use the same database path as in init_db
+            db_path = os.environ.get('DATABASE_PATH', os.path.join(os.environ.get('HOME', ''), 'webauthn.db'))
+            print(f"Using database path: {db_path}")
+            
+            conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
             # Get user_id from session or generate a new one if not available
@@ -830,7 +836,23 @@ def webauthn_register_complete():
         return jsonify({'status': 'success', 'userId': user_id})
     except Exception as e:
         print(f"⛔ ERROR in registration completion: {str(e)}")
+        print(f"ERROR TYPE: {type(e).__name__}")
+        print(f"ERROR ARGS: {e.args}")
+        print("FULL TRACEBACK:")
         print(traceback.format_exc())
+        
+        # Check if database exists and is accessible
+        try:
+            db_path = os.environ.get('DATABASE_PATH', os.path.join(os.environ.get('HOME', ''), 'webauthn.db'))
+            if os.path.exists(db_path):
+                print(f"✅ Database file exists at: {db_path}")
+                print(f"✅ Database file size: {os.path.getsize(db_path)} bytes")
+                print(f"✅ Database file permissions: {oct(os.stat(db_path).st_mode)}")
+            else:
+                print(f"❌ Database file does not exist at: {db_path}")
+        except Exception as db_check_error:
+            print(f"❌ Error checking database: {str(db_check_error)}")
+            
         return jsonify({'error': str(e)}), 500
 
 @app.route('/login_options', methods=['POST'])
