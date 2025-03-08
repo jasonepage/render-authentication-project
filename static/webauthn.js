@@ -1,9 +1,20 @@
 /**
- * WebAuthn Client Handler v1.4.2
- * Enhanced with iOS compatibility improvements
+ * WebAuthn Client Handler v1.4.3
+ * Enhanced with iOS compatibility & routing fixes
  */
 const webAuthn = {
-    version: '1.4.2',
+    version: '1.4.3',
+    
+    // Determine correct API endpoint path
+    getEndpointPath: function(endpoint) {
+        // Try to auto-detect best endpoint format
+        if (window.location.href.includes('render-authentication-project.onrender.com')) {
+            return `/${endpoint}`;  // Use root path on production
+        } else {
+            // In development, try both formats
+            return `/${endpoint}`;
+        }
+    },
     
     log: function(message) {
         console.log(`WebAuthn [${this.version}]: ${message}`);
@@ -88,8 +99,11 @@ const webAuthn = {
             this.log('iOS device detected, using iOS-specific settings');
         }
 
+        const registerOptionsUrl = this.getEndpointPath('register_options');
+        this.log(`Using registration options URL: ${registerOptionsUrl}`);
+
         // Step 1: Get registration options from server
-        fetch('/register_options', {
+        fetch(registerOptionsUrl, {
             method: 'POST',
             credentials: 'include',
             headers: {
@@ -98,7 +112,7 @@ const webAuthn = {
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to get registration options');
+                throw new Error(`Failed to get registration options (${response.status})`);
             }
             return response.json();
         })
@@ -146,8 +160,11 @@ const webAuthn = {
             
             this.log(`Credential ID: ${credentialId.substring(0, 20)}...`);
             
+            const registerCompleteUrl = this.getEndpointPath('register_complete');
+            this.log(`Using register complete URL: ${registerCompleteUrl}`);
+            
             // Step 3: Send credential data to server
-            return fetch('/register_complete', {
+            return fetch(registerCompleteUrl, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {
@@ -166,7 +183,7 @@ const webAuthn = {
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to complete registration');
+                throw new Error(`Failed to complete registration (${response.status})`);
             }
             return response.json();
         })
@@ -199,8 +216,11 @@ const webAuthn = {
             this.log('iOS device detected, using iOS-specific login settings');
         }
 
+        const loginOptionsUrl = this.getEndpointPath('login_options');
+        this.log(`Using login options URL: ${loginOptionsUrl}`);
+
         // Step 1: Get login options from server
-        fetch('/login_options', {
+        fetch(loginOptionsUrl, {
             method: 'POST',
             credentials: 'include',
             headers: {
@@ -209,7 +229,7 @@ const webAuthn = {
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to get login options');
+                throw new Error(`Failed to get login options (${response.status})`);
             }
             return response.json();
         })
@@ -257,9 +277,12 @@ const webAuthn = {
             const signature = this.arrayBufferToBase64url(assertion.response.signature);
             
             this.log(`Assertion credential ID: ${credentialId.substring(0, 20)}...`);
+
+            const loginCompleteUrl = this.getEndpointPath('login_complete');
+            this.log(`Using login complete URL: ${loginCompleteUrl}`);
             
             // Step 3: Send assertion to server
-            return fetch('/login_complete', {
+            return fetch(loginCompleteUrl, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {
@@ -280,7 +303,7 @@ const webAuthn = {
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to complete login');
+                throw new Error(`Failed to complete login (${response.status})`);
             }
             return response.json();
         })
@@ -307,13 +330,16 @@ const webAuthn = {
     logout: function() {
         this.log('Logging out');
         
-        fetch('/logout', {
+        const logoutUrl = this.getEndpointPath('logout');
+        this.log(`Using logout URL: ${logoutUrl}`);
+        
+        fetch(logoutUrl, {
             method: 'POST',
             credentials: 'include'
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to logout');
+                throw new Error(`Failed to logout (${response.status})`);
             }
             return response.json();
         })
@@ -333,13 +359,16 @@ const webAuthn = {
     checkAuthStatus: function() {
         this.log('Checking authentication status');
         
-        fetch('/auth_status', {
+        const authStatusUrl = this.getEndpointPath('auth_status');
+        this.log(`Using auth status URL: ${authStatusUrl}`);
+        
+        fetch(authStatusUrl, {
             method: 'GET',
             credentials: 'include'
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to check auth status');
+                throw new Error(`Failed to check auth status (${response.status})`);
             }
             return response.json();
         })
@@ -413,13 +442,15 @@ const webAuthn = {
 
     // Fetch chat messages
     fetchMessages: function() {
-        fetch('/messages', {
+        const messagesUrl = this.getEndpointPath('get_messages');
+        
+        fetch(messagesUrl, {
             method: 'GET',
             credentials: 'include'
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error('Failed to fetch messages');
+                throw new Error(`Failed to fetch messages (${response.status})`);
             }
             return response.json();
         })
@@ -442,7 +473,7 @@ const webAuthn = {
             }
         })
         .catch(error => {
-            console.error('Failed to fetch messages:', error);
+            console.error(`Failed to fetch messages: ${error.message}`);
         });
     },
 
@@ -456,7 +487,9 @@ const webAuthn = {
         if (message) {
             this.log(`Sending message: ${message}`);
             
-            fetch('/send_message', {
+            const sendMessageUrl = this.getEndpointPath('send_message');
+            
+            fetch(sendMessageUrl, {
                 method: 'POST',
                 credentials: 'include',
                 headers: {
@@ -466,7 +499,7 @@ const webAuthn = {
             })
             .then(response => {
                 if (!response.ok) {
-                    throw new Error('Failed to send message');
+                    throw new Error(`Failed to send message (${response.status})`);
                 }
                 return response.json();
             })

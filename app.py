@@ -52,15 +52,33 @@ CORS(app,
 
 @app.before_request
 def log_request_info():
-    """Log details about every incoming request"""
-    print("\n=== REQUEST INFO ===")
-    print(f"Method: {request.method}")
-    print(f"Path: {request.path}")
-    print(f"Headers: {dict(request.headers)}")
-    if request.is_json:
-        print(f"JSON Data: {request.get_json()}")
-    print(f"Session: {dict(session)}")
-    print("==================\n")
+    """Log details about each incoming request"""
+    try:
+        # Log request path and method
+        print(f"\n=== {request.method} {request.path} ===")
+        
+        # Log headers
+        print(f"Headers: {dict(request.headers)}")
+        
+        # Log JSON data if present
+        if request.is_json:
+            try:
+                data = request.get_json(silent=True)
+                print(f"JSON Data: {json.dumps(data)}")
+            except Exception as e:
+                print(f"Error parsing JSON: {str(e)}")
+        
+        # Log form data if present
+        if request.form:
+            print(f"Form Data: {dict(request.form)}")
+        
+        # Log current session state if present
+        if session:
+            print(f"Session: {dict(session)}")
+    except Exception as e:
+        print(f"Error logging request info: {str(e)}")
+        # Don't block the request on logging errors
+        pass
 
 @app.after_request
 def log_response_info(response):
@@ -630,6 +648,42 @@ def bytes_to_base64url(bytes_value):
 # ==========================================
 # WebAuthn API Endpoints
 # ==========================================
+
+@app.route('/static/register_options', methods=['POST'])
+def register_options_alias():
+    """Alias for register_options to ensure proper routing"""
+    print("Using register_options_alias")
+    return webauthn_register_options()
+
+@app.route('/static/login_options', methods=['POST'])
+def login_options_alias():
+    """Alias for login_options to ensure proper routing"""
+    print("Using login_options_alias")
+    return webauthn_login_options()
+
+@app.route('/static/register_complete', methods=['POST'])
+def register_complete_alias():
+    """Alias for register_complete to ensure proper routing"""
+    print("Using register_complete_alias")
+    return webauthn_register_complete()
+
+@app.route('/static/login_complete', methods=['POST'])
+def login_complete_alias():
+    """Alias for login_complete to ensure proper routing"""
+    print("Using login_complete_alias")
+    return webauthn_login_complete()
+
+@app.route('/static/logout', methods=['POST'])
+def logout_alias():
+    """Alias for logout to ensure proper routing"""
+    print("Using logout_alias")
+    return webauthn_logout()
+
+@app.route('/static/auth_status', methods=['GET'])
+def auth_status_alias():
+    """Alias for auth_status to ensure proper routing"""
+    print("Using auth_status_alias")
+    return webauthn_auth_status()
 
 @app.route('/register_options', methods=['POST'])
 def webauthn_register_options():
