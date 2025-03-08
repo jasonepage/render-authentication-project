@@ -633,15 +633,14 @@ def bytes_to_base64url(bytes_value):
 @app.route('/register_options', methods=['POST'])
 def webauthn_register_options():
     """Generate registration options for WebAuthn"""
-    print("\n⭐⭐⭐ REGISTRATION OPTIONS REQUESTED ⭐⭐⭐")
+    print("\n⭐ REGISTRATION OPTIONS REQUESTED ⭐")
     print(f"Method: {request.method}")
     print(f"Content-Type: {request.content_type}")
-    print(f"Data: {request.get_data()}")
     
     try:
         data = request.get_json() or {}
         
-        # Generate a random user ID
+        # Generate a random user ID - this will be associated with the physical key
         user_id = secrets.token_urlsafe(8)
         print(f"Generated user_id: {user_id}")
         
@@ -654,12 +653,12 @@ def webauthn_register_options():
         session['user_id_for_registration'] = user_id
         print(f"Session after challenge storage: {dict(session)}")
         
-        # Create the registration options
+        # Create registration options - IMPORTANT: Set parameters for cross-device compatibility
         options = {
             'challenge': challenge,
             'rp': {
-                'name': 'Key Chat System',
-                'id': request.host
+                'name': 'FIDO2 Chat System',
+                'id': request.host  # Use actual host from request
             },
             'user': {
                 'id': user_id,
@@ -667,14 +666,18 @@ def webauthn_register_options():
                 'displayName': data.get('username', 'Anonymous')
             },
             'pubKeyCredParams': [
-                { 'type': 'public-key', 'alg': -7 } # ES256 algorithm
+                { 'type': 'public-key', 'alg': -7 }  # ES256 algorithm
             ],
             'timeout': 60000,
             'attestation': 'none',
             'authenticatorSelection': {
-                'authenticatorAttachment': 'cross-platform',
-                'requireResidentKey': False,
-                'userVerification': 'discouraged'
+                'authenticatorAttachment': 'cross-platform',  # Allow any type of authenticator
+                'requireResidentKey': False,  # IMPORTANT: Don't require resident keys
+                'residentKey': 'discouraged',  # Explicitly discourage resident keys
+                'userVerification': 'discouraged'  # Don't require user verification
+            },
+            'extensions': {
+                'credProps': True  # Request credential properties extension
             }
         }
         
