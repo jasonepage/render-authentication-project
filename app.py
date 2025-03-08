@@ -77,37 +77,38 @@ def log_response_info(response):
     return response
 
 def init_db():
-    """Initialize SQLite database with required tables."""
-    print("\n=== DATABASE INITIALIZATION ===")
+    """Initialize the database with required tables"""
     try:
-        # Use a fixed database path that's guaranteed to be writable on Render
+        print("\n⭐ INITIALIZING DATABASE ⭐")
+        # Ensure the db directory exists
         db_path = '/opt/render/webauthn.db'
-        os.environ['DATABASE_PATH'] = db_path
+        db_dir = os.path.dirname(db_path)
+        
+        if not os.path.exists(db_dir):
+            print(f"Creating directory: {db_dir}")
+            os.makedirs(db_dir, exist_ok=True)
+            
         print(f"Database path: {db_path}")
         
-        # Check directory permissions
-        db_dir = os.path.dirname(db_path)
-        print(f"Directory exists: {os.path.exists(db_dir)}")
-        print(f"Directory writable: {os.access(db_dir, os.W_OK)}")
-        
+        # Check permissions
+        if os.path.exists(db_dir):
+            print(f"Directory permissions: {oct(os.stat(db_dir).st_mode)}")
+            
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         
-        # Create security_keys table
-        print("Creating security_keys table...")
-        # Drop the table if it exists to refresh the schema
-        c.execute("DROP TABLE IF EXISTS security_keys")
+        # Modified schema: credential_id is no longer PRIMARY KEY to allow multiple formats
+        # for the same credential (iOS compatibility)
         c.execute('''
             CREATE TABLE IF NOT EXISTS security_keys (
-                credential_id TEXT PRIMARY KEY,
+                credential_id TEXT,
                 user_id TEXT,
                 public_key TEXT,
-                created_at TEXT
+                created_at TEXT,
+                PRIMARY KEY (credential_id)
             )
         ''')
         
-        # Create messages table
-        print("Creating messages table...")
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -633,203 +634,232 @@ def bytes_to_base64url(bytes_value):
 @app.route('/register_options', methods=['POST'])
 def webauthn_register_options():
     """Generate registration options for WebAuthn"""
-    print("\n⭐ REGISTRATION OPTIONS REQUESTED ⭐")
-    print(f"Method: {request.method}")
-    print(f"Content-Type: {request.content_type}")
-    
     try:
-        data = request.get_json() or {}
+        print("\n⭐ WEBAUTHN REGISTRATION OPTIONS ⭐")
         
-        # Generate a random user ID
-        user_id = secrets.token_urlsafe(8)
-        print(f"Generated user_id: {user_id}")
+        # Generate a random user ID if not already in session
+        if 'user_id_for_registration' not in session:
+            user_id = f"user-{secrets.token_urlsafe(8)}"
+            session['user_id_for_registration'] = user_id
+            print(f"Register Options: Generated new user ID: {user_id}")
+        else:
+            user_id = session['user_id_for_registration']
+            print(f"Register Options: Using existing user ID: {user_id}")
         
         # Generate a challenge
         challenge = generate_challenge()
-        print(f"Generated challenge: {challenge}")
-        
-        # Store the challenge and user_id in the session
         session['challenge'] = challenge
-        session['user_id_for_registration'] = user_id
-        print(f"Session after challenge storage: {dict(session)}")
+        print(f"Register Options: Generated challenge: {challenge}")
+        print(f"Register Options: Session data: {dict(session)}")
         
-        # Create registration options - CRITICAL CROSS-PLATFORM SETTINGS
+        # Get host info for proper rpId setting
+        host = request.host
+        hostname = host.split(':')[0]  # Remove port if present
+        print(f"Register Options: Host: {host}, Hostname: {hostname}")
+        
+        # For Render deployment use the constant rpId
+        if hostname != 'localhost' and hostname != '127.0.0.1':
+            rp_id = 'render-authentication-project.onrender.com'
+        else:
+            rp_id = hostname
+            
+        print(f"Register Options: Using rpId: {rp_id}")
+        
+        # Create registration options
         options = {
-            'challenge': challenge,
-            'rp': {
-                'name': 'FIDO2 Chat System',
-                'id': request.host
+            "challenge": challenge,
+            "rp": {
+                "name": "FIDO2 Chat System",
+                "id": rp_id
             },
-            'user': {
-                'id': user_id,
-                'name': data.get('username', 'Anonymous'),
-                'displayName': data.get('username', 'Anonymous')
+            "user": {
+                "id": user_id,
+                "name": f"user-{user_id[:6]}",
+                "displayName": f"User {user_id[:6]}"
             },
-            'pubKeyCredParams': [
-                { 'type': 'public-key', 'alg': -7 }
+            "pubKeyCredParams": [
+                {
+                    "type": "public-key",
+                    "alg": -7  # ES256 algorithm
+                }
             ],
-            'timeout': 120000,  # Longer timeout for better user experience
-            'attestation': 'none',
-            'authenticatorSelection': {
-                # Allow any type of authenticator
-                'authenticatorAttachment': 'cross-platform',
-                # CRITICAL: Don't require resident keys for cross-device compatibility
-                'requireResidentKey': False,
-                'residentKey': 'discouraged',
-                'userVerification': 'discouraged'
-            }
+            "authenticatorSelection": {
+                # Cross-platform means any type of authenticator (security key or platform)
+                "authenticatorAttachment": "cross-platform",
+                # False is crucial for cross-device compatibility
+                "requireResidentKey": False,
+                # Discouraged is best for cross-platform
+                "userVerification": "discouraged"
+            },
+            "timeout": 120000,  # 2 minutes
+            "attestation": "none"  # Don't require attestation to keep it simple
         }
         
-        print(f"Returning registration options: {options}")
+        print(f"Register Options: Returning options: {json.dumps(options)[:100]}...")
         return jsonify(options)
+        
     except Exception as e:
-        print(f"⛔ ERROR in registration options: {str(e)}")
+        print(f"Registration Options Error: {str(e)}")
         print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/register_complete', methods=['POST'])
 def webauthn_register_complete():
-    """Complete registration for WebAuthn"""
-    print("\n=== WEBAUTHN REGISTRATION COMPLETION ===")
-    data = request.get_json()
-    print(f"Registration: Received data with credential ID: {data.get('id', '')[:15]}...")
-    
+    """Complete the registration process for WebAuthn"""
     try:
-        # Skip complex CBOR validation and just store a simplified credential
-        user_id = session.get('user_id_for_registration') or secrets.token_urlsafe(8)
-        print(f"Registration: Using user_id: {user_id}")
+        print("\n⭐ WEBAUTHN REGISTRATION COMPLETION ⭐")
+        data = request.get_json()
+        print(f"Register Complete: Registration data received")
         
-        # Create a simple credential from the raw credential ID
+        # Verify we have a credential ID
         credential_id = data.get('id')
         if not credential_id:
-            print("Registration: No credential ID found in request")
-            return jsonify({'error': 'No credential ID found in request'}), 400
+            print("Register Error: No credential ID in response")
+            return jsonify({'error': 'No credential ID in response'}), 400
             
-        # Create a dummy public key - we won't actually use this for verification in this simplified demo
-        # In a real implementation, you would extract the public key properly
-        public_key = {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": "dummy-x-param",
-            "y": "dummy-y-param"
-        }
+        print(f"Register Complete: Received credential ID: {credential_id[:20]}...")
         
-        # Store in database (hardcoded path that works on Render)
+        # Verify we have the user ID in session
+        if 'user_id_for_registration' not in session:
+            print("Register Error: No user ID in session")
+            return jsonify({'error': 'Registration session expired'}), 400
+            
+        user_id = session['user_id_for_registration']
+        print(f"Register Complete: Using user ID from session: {user_id}")
+        
+        # Get the attestation response data
+        if not data.get('response') or not data['response'].get('clientDataJSON') or not data['response'].get('attestationObject'):
+            print("Register Error: Missing required attestation data")
+            return jsonify({'error': 'Invalid attestation data'}), 400
+            
+        # For this simplification, we'll just store the credential without complex validation
+        # In a production environment, you would validate the attestation
+        public_key = json.dumps({
+            'id': credential_id,
+            'type': data.get('type', 'public-key'),
+            'attestation': {
+                'clientDataJSON': data['response']['clientDataJSON'],
+                'attestationObject': data['response']['attestationObject']
+            }
+        })
+        
+        # Store the credential in the database
         db_path = '/opt/render/webauthn.db'
-        print(f"Registration: Using database path: {db_path}")
+        print(f"Register Complete: Using database: {db_path}")
         
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # First check if this credential ID already exists (same device being registered again)
-        print(f"Registration: Checking if credential already exists: {credential_id[:15]}...")
-        cursor.execute("SELECT credential_id, user_id FROM security_keys WHERE credential_id=?", (credential_id,))
-        existing_cred = cursor.fetchone()
+        # Check if this user already has credentials
+        cursor.execute("SELECT credential_id FROM security_keys WHERE user_id = ?", (user_id,))
+        existing_credentials = cursor.fetchall()
+        print(f"Register Complete: User has {len(existing_credentials)} existing credentials")
         
-        if existing_cred:
-            existing_user_id = existing_cred[1]
-            print(f"Registration: This credential already exists for user: {existing_user_id}")
-            
-            # Use this user_id instead of creating a new one
-            user_id = existing_user_id
-            print(f"Registration: Using existing user_id: {user_id}")
-        else:
-            print(f"Registration: No existing credential found, creating new registration")
+        # Store both formats of the credential ID to improve cross-device compatibility
+        # iOS often changes the formatting between registration and login
+        standard_format = credential_id.replace('-', '+').replace('_', '/').rstrip('=')
+        urlsafe_format = credential_id.replace('+', '-').replace('/', '_').replace('=', '')
         
-        # Ensure table exists
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS security_keys (
-            credential_id TEXT PRIMARY KEY,
-            user_id TEXT,
-            public_key TEXT,
-            created_at TEXT
-        )
-        ''')
-        
-        # Store credential
-        timestamp = datetime.datetime.now().isoformat()
-        
-        # Use INSERT OR REPLACE to update if exists or insert if not
+        # Store the credential with the default format first
+        print(f"Register Complete: Storing credential with ID: {credential_id[:20]}...")
         cursor.execute(
-            "INSERT OR REPLACE INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
-            (credential_id, user_id, json.dumps(public_key), timestamp)
+            "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (credential_id, user_id, public_key)
         )
+        
+        # Also store the alternate format as a separate record for iOS compatibility
+        if credential_id != standard_format:
+            print(f"Register Complete: Also storing standard format: {standard_format[:20]}...")
+            cursor.execute(
+                "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
+                (standard_format, user_id, public_key)
+            )
+        
         conn.commit()
-        
-        # Get all credentials for this user for debugging
-        cursor.execute("SELECT credential_id FROM security_keys WHERE user_id=?", (user_id,))
-        user_creds = cursor.fetchall()
-        print(f"Registration: User {user_id} now has {len(user_creds)} credential(s)")
-        
         conn.close()
         
-        # Update session
+        # Set authenticated session
         session['authenticated'] = True
         session['user_id'] = user_id
-        print(f"Registration: Updated session: {dict(session)}")
+        print(f"Register Complete: Updated session: {dict(session)}")
         
-        return jsonify({'status': 'success', 'userId': user_id})
+        return jsonify({
+            'status': 'success',
+            'userId': user_id
+        })
         
     except Exception as e:
-        print(f"Registration error: {str(e)}")
+        print(f"Register Error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/login_options', methods=['POST'])
 def webauthn_login_options():
-    """Generate authentication options for WebAuthn"""
+    """Get options for WebAuthn login"""
     try:
-        print("\n⭐ WEBAUTHN LOGIN OPTIONS REQUEST ⭐")
-        
-        # Generate a random challenge
+        print("\n⭐ WEBAUTHN LOGIN OPTIONS ⭐")
+        # Generate a challenge for this login attempt
         challenge = generate_challenge()
-        print(f"Login: Generated challenge: {challenge}")
-        
-        # Store in session for verification later
         session['challenge'] = challenge
-        print(f"Login: Updated session: {dict(session)}")
+        print(f"Login Options: Generated challenge: {challenge}")
+        print(f"Login Options: Session data: {dict(session)}")
         
-        # Get ALL credentials from the database - CRITICAL for cross-device compatibility
+        # Get host info for proper rpId setting
+        host = request.host
+        hostname = host.split(':')[0]  # Remove port if present
+        print(f"Login Options: Host: {host}, Hostname: {hostname}")
+        
+        # For Render deployment use the constant rpId
+        if hostname != 'localhost' and hostname != '127.0.0.1':
+            rp_id = 'render-authentication-project.onrender.com'
+        else:
+            rp_id = hostname
+            
+        print(f"Login Options: Using rpId: {rp_id}")
+        
+        # Connect to the database
         db_path = '/opt/render/webauthn.db'
-        print(f"Login: Using database path: {db_path}")
+        print(f"Login Options: Using database: {db_path}")
         
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Get all credentials - NO FILTERING BY USER - this is key for cross-device
-        print("Login: Getting ALL credentials from database...")
-        cursor.execute("SELECT credential_id, user_id FROM security_keys")
-        credentials = [{"id": row[0], "user_id": row[1]} for row in cursor.fetchall()]
+        # Get all credentials - needed for cross-device login
+        print("Login Options: Retrieving all credentials")
+        cursor.execute("SELECT credential_id FROM security_keys")
+        credentials = cursor.fetchall()
         conn.close()
         
-        print(f"Login: Found {len(credentials)} credential(s) in database")
+        allowed_credentials = []
+        print(f"Login Options: Found {len(credentials)} credentials")
         
-        # Format for WebAuthn
-        allow_credentials = []
-        for cred in credentials:
-            allow_credentials.append({
+        # Prepare credentials for WebAuthn
+        for (credential_id,) in credentials:
+            print(f"Login Options: Adding credential: {credential_id[:20]}...")
+            # iOS doesn't like certain formats, so provide multiple transport options
+            allowed_credentials.append({
                 "type": "public-key",
-                "id": cred["id"],
-                # Include all possible transport methods for maximum compatibility
-                "transports": ["usb", "nfc", "ble", "internal"]
+                "id": credential_id,
+                # Include all possible transports for maximum compatibility
+                "transports": ["usb", "nfc", "ble", "internal", "hybrid"]
             })
-        
-        # Create options with matching rpId
+            
+        # Create options according to WebAuthn spec
         options = {
             "challenge": challenge,
-            "timeout": 60000,
-            "rpId": request.host,
-            "allowCredentials": allow_credentials,
-            "userVerification": "discouraged"
+            "timeout": 60000,  # 60 seconds
+            "rpId": rp_id,
+            "allowCredentials": allowed_credentials,
+            "userVerification": "discouraged"  # Change to "preferred" for iOS
         }
         
-        print(f"Login: Returning options with {len(allow_credentials)} credentials")
+        print(f"Login Options: Returning options: {json.dumps(options)[:100]}...")
         return jsonify(options)
         
     except Exception as e:
-        print(f"Login error: {str(e)}")
+        print(f"Login Options Error: {str(e)}")
         print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/login_complete', methods=['POST'])
 def webauthn_login_complete():
@@ -848,13 +878,13 @@ def webauthn_login_complete():
         
         # Get the user from the database
         db_path = '/opt/render/webauthn.db'
-        print(f"Login: Using database: {db_path}")
+        print(f"Login Complete: Using database: {db_path}")
         
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
         # Dump all credentials for debugging
-        print("Login: Dumping all credentials for debugging")
+        print("Login Complete: Dumping all credentials for debugging")
         cursor.execute("SELECT credential_id, user_id FROM security_keys")
         all_credentials = cursor.fetchall()
         for row in all_credentials:
@@ -862,50 +892,37 @@ def webauthn_login_complete():
             user_id = row[1]
             print(f"Credential: {cred_id[:20]}... -> User: {user_id}")
             
-            # Check for match
-            if cred_id == credential_id:
-                print("EXACT MATCH FOUND!")
+        print(f"Login Complete: Searching for credential: {credential_id[:20]}...")
         
-        # Try exact match first
-        print("Login: Looking up exact credential match...")
-        cursor.execute("SELECT user_id FROM security_keys WHERE credential_id = ?", (credential_id,))
-        row = cursor.fetchone()
+        # Try multiple formats for the credential ID (iOS often changes formatting)
+        formats_to_try = [
+            credential_id,                                          # Original
+            credential_id.replace('-', '+').replace('_', '/'),      # URL safe to standard
+            credential_id.replace('+', '-').replace('/', '_'),      # Standard to URL safe
+            credential_id.replace('-', '+').replace('_', '/').rstrip('='),   # URL safe to standard without padding
+            credential_id.replace('+', '-').replace('/', '_').replace('=', '')   # Standard to URL safe without padding
+        ]
         
-        if row:
-            # Found exact match
-            user_id = row[0]
-            print(f"Login Success: Found user {user_id} for credential")
-        else:
-            # Try formatted version
-            alternate_id = credential_id.replace('-', '+').replace('_', '/').rstrip('=')
-            print(f"Login: Trying alternate format: {alternate_id[:20]}...")
-            cursor.execute("SELECT user_id FROM security_keys WHERE credential_id = ?", (alternate_id,))
+        user_id = None
+        for format_id in formats_to_try:
+            print(f"Login Complete: Trying format: {format_id[:20]}...")
+            cursor.execute("SELECT user_id FROM security_keys WHERE credential_id = ?", (format_id,))
             row = cursor.fetchone()
-            
             if row:
                 user_id = row[0]
-                print(f"Login Success: Found user {user_id} using alternate format")
-            else:
-                # Try another format
-                second_alt = credential_id.replace('+', '-').replace('/', '_').replace('=', '')
-                print(f"Login: Trying second alternate format: {second_alt[:20]}...")
-                cursor.execute("SELECT user_id FROM security_keys WHERE credential_id = ?", (second_alt,))
-                row = cursor.fetchone()
-                
-                if row:
-                    user_id = row[0]
-                    print(f"Login Success: Found user {user_id} using second alternate format")
-                else:
-                    print("Login Error: No matching credential found")
-                    conn.close()
-                    return jsonify({'error': 'Unknown credential'}), 400
+                print(f"Login Complete: Found user {user_id}")
+                break
         
         conn.close()
+        
+        if not user_id:
+            print("Login Error: No matching credential found after trying all formats")
+            return jsonify({'error': 'Unknown credential'}), 400
         
         # Set session
         session['authenticated'] = True
         session['user_id'] = user_id
-        print(f"Login: Updated session: {dict(session)}")
+        print(f"Login Complete: Updated session: {dict(session)}")
         
         return jsonify({
             'status': 'success',

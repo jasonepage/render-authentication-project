@@ -1,41 +1,59 @@
 /**
- * WebAuthn Client Handler v1.4.1
- * Simplified and robust implementation for cross-device FIDO2 WebAuthn
+ * WebAuthn Client Handler v1.4.2
+ * Enhanced with iOS compatibility improvements
  */
 const webAuthn = {
-    version: '1.4.1',
+    version: '1.4.2',
     
     log: function(message) {
         console.log(`WebAuthn [${this.version}]: ${message}`);
     },
     
-    // Base64URL to ArrayBuffer
-    base64urlToArrayBuffer: function(base64url) {
-        this.log(`Converting base64url to ArrayBuffer: ${base64url.substring(0, 20)}...`);
-        const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
-        const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/') + padding;
-        const binary = atob(base64);
-        const buffer = new ArrayBuffer(binary.length);
-        const view = new Uint8Array(buffer);
-        for (let i = 0; i < binary.length; i++) {
-            view[i] = binary.charCodeAt(i);
-        }
-        this.log(`Conversion completed, buffer length: ${buffer.byteLength}`);
-        return buffer;
+    // Detect iOS
+    isIOS: function() {
+        const ua = window.navigator.userAgent;
+        const isIOS = /iPad|iPhone|iPod/.test(ua) || 
+                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        return isIOS;
     },
     
-    // ArrayBuffer to Base64URL
+    // Base64URL to ArrayBuffer with iOS safety checks
+    base64urlToArrayBuffer: function(base64url) {
+        this.log(`Converting base64url to ArrayBuffer: ${base64url.substring(0, 20)}...`);
+        try {
+            const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
+            const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/') + padding;
+            const binary = atob(base64);
+            const buffer = new ArrayBuffer(binary.length);
+            const view = new Uint8Array(buffer);
+            for (let i = 0; i < binary.length; i++) {
+                view[i] = binary.charCodeAt(i);
+            }
+            this.log(`Conversion completed, buffer length: ${buffer.byteLength}`);
+            return buffer;
+        } catch (error) {
+            this.log(`Error converting base64url: ${error.message}`);
+            throw error;
+        }
+    },
+    
+    // ArrayBuffer to Base64URL with iOS safety
     arrayBufferToBase64url: function(buffer) {
         this.log(`Converting ArrayBuffer to base64url, buffer length: ${buffer.byteLength}`);
-        const view = new Uint8Array(buffer);
-        let binary = '';
-        for (let i = 0; i < view.length; i++) {
-            binary += String.fromCharCode(view[i]);
+        try {
+            const view = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < view.length; i++) {
+                binary += String.fromCharCode(view[i]);
+            }
+            const base64 = btoa(binary);
+            const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+            this.log(`Conversion result: ${base64url.substring(0, 20)}...`);
+            return base64url;
+        } catch (error) {
+            this.log(`Error converting ArrayBuffer: ${error.message}`);
+            throw error;
         }
-        const base64 = btoa(binary);
-        const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-        this.log(`Conversion result: ${base64url.substring(0, 20)}...`);
-        return base64url;
     },
     
     // Show modal with message
@@ -65,6 +83,11 @@ const webAuthn = {
         this.log('Starting registration process');
         this.showModal('Please insert your security key and follow the browser instructions...');
 
+        const isIOS = this.isIOS();
+        if (isIOS) {
+            this.log('iOS device detected, using iOS-specific settings');
+        }
+
         // Step 1: Get registration options from server
         fetch('/register_options', {
             method: 'POST',
@@ -93,6 +116,17 @@ const webAuthn = {
                 for (let i = 0; i < options.excludeCredentials.length; i++) {
                     options.excludeCredentials[i].id = this.base64urlToArrayBuffer(options.excludeCredentials[i].id);
                 }
+            }
+            
+            // iOS-specific adjustments
+            if (isIOS) {
+                // Override any user verification and attachment settings for iOS
+                options.authenticatorSelection = options.authenticatorSelection || {};
+                options.authenticatorSelection.userVerification = 'discouraged';
+                // Don't specify authenticatorAttachment for iOS - it causes issues
+                delete options.authenticatorSelection.authenticatorAttachment;
+                
+                this.log('Adjusted options for iOS compatibility');
             }
             
             this.log('Converted challenge and IDs to ArrayBuffer, calling navigator.credentials.create()');
@@ -160,6 +194,11 @@ const webAuthn = {
         this.log('Starting login process');
         this.showModal('Please insert your security key and follow the browser instructions...');
 
+        const isIOS = this.isIOS();
+        if (isIOS) {
+            this.log('iOS device detected, using iOS-specific login settings');
+        }
+
         // Step 1: Get login options from server
         fetch('/login_options', {
             method: 'POST',
@@ -188,6 +227,17 @@ const webAuthn = {
                 }
             } else {
                 this.log('No allowCredentials found in options');
+            }
+            
+            // iOS-specific adjustments
+            if (isIOS) {
+                // For iOS, userVerification should be discouraged or preferred
+                options.userVerification = 'discouraged';
+                
+                // Ensure timeout is reasonable
+                options.timeout = 120000; // 2 minutes
+                
+                this.log('Adjusted options for iOS compatibility');
             }
             
             this.log('Converted challenge and credential IDs to ArrayBuffer, calling navigator.credentials.get()');
@@ -435,6 +485,15 @@ const webAuthn = {
     // Initialize the application
     init: function() {
         this.log('Initializing WebAuthn client');
+        
+        // Log platform information
+        const isIOS = this.isIOS();
+        this.log(`Platform detection: iOS = ${isIOS}`);
+        this.log(`User Agent: ${navigator.userAgent}`);
+        
+        if (isIOS) {
+            this.log('iOS-specific optimizations will be applied');
+        }
         
         // Check authentication status on page load
         this.checkAuthStatus();
