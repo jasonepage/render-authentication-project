@@ -7,13 +7,27 @@ const webAuthn = {
     
     // Determine correct API endpoint path
     getEndpointPath: function(endpoint) {
-        // Try to auto-detect best endpoint format
+        this.log(`Finding path for endpoint: ${endpoint}`);
+        
+        // For maximum compatibility, try both static and root paths
+        // Start with the simplest approach - direct root path
+        const rootPath = `/${endpoint}`;
+        
+        // Then try '/static/' prefix which is needed in some environments
+        const staticPath = `/static/${endpoint}`;
+        
+        // Testing code - try to fetch options from both paths to see which one works
+        this.log(`Using root path: ${rootPath} (primary)`);
+        
+        // Show what we're choosing
         if (window.location.href.includes('render-authentication-project.onrender.com')) {
-            return `/${endpoint}`;  // Use root path on production
+            this.log('Production environment detected');
         } else {
-            // In development, try both formats
-            return `/${endpoint}`;
+            this.log('Development environment detected');
         }
+        
+        // Always return root path first, we have alias routes set up
+        return rootPath;
     },
     
     log: function(message) {
@@ -89,6 +103,50 @@ const webAuthn = {
         }
     },
 
+    // Helper function for debugging fetch operations
+    debugFetch: function(url, options, callback) {
+        this.log(`Fetch request to ${url}`);
+        this.log(`Fetch options: ${JSON.stringify(options)}`);
+        
+        // Track timing
+        const startTime = Date.now();
+        
+        return fetch(url, options)
+            .then(response => {
+                const endTime = Date.now();
+                this.log(`Fetch response from ${url} in ${endTime - startTime}ms`);
+                this.log(`Response status: ${response.status} ${response.statusText}`);
+                
+                // Clone the response so we can both check it and return it
+                const responseClone = response.clone();
+                
+                // Attempt to read the response body for debugging
+                responseClone.text().then(text => {
+                    try {
+                        // Try to parse as JSON to make it readable
+                        const json = JSON.parse(text);
+                        this.log(`Response body (JSON): ${JSON.stringify(json)}`);
+                    } catch (e) {
+                        // If not JSON, just log the text (truncated if very long)
+                        if (text.length > 500) {
+                            this.log(`Response body (text, truncated): ${text.substring(0, 500)}...`);
+                        } else {
+                            this.log(`Response body (text): ${text}`);
+                        }
+                    }
+                }).catch(err => {
+                    this.log(`Error reading response body: ${err.message}`);
+                });
+                
+                // Call the original callback with the original response
+                return callback(response);
+            })
+            .catch(error => {
+                this.log(`Fetch error for ${url}: ${error.message}`);
+                throw error;
+            });
+    },
+
     // Register a new security key
     registerKey: function() {
         this.log('Starting registration process');
@@ -102,22 +160,29 @@ const webAuthn = {
         const registerOptionsUrl = this.getEndpointPath('register_options');
         this.log(`Using registration options URL: ${registerOptionsUrl}`);
 
-        // Step 1: Get registration options from server
-        fetch(registerOptionsUrl, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json'
+        // Use debugFetch instead of regular fetch
+        this.debugFetch(
+            registerOptionsUrl, 
+            {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ timestamp: Date.now() })
+            },
+            response => {
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        this.log(`Error response: ${text}`);
+                        throw new Error(`Failed to get registration options (${response.status}): ${text}`);
+                    });
+                }
+                return response.json();
             }
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Failed to get registration options (${response.status})`);
-            }
-            return response.json();
-        })
+        )
         .then(options => {
-            this.log(`Received registration options: ${JSON.stringify(options).substring(0, 100)}...`);
+            this.log(`Received registration options: ${JSON.stringify(options)}`);
             
             // Convert base64url encoded values to ArrayBuffer as required by WebAuthn
             options.challenge = this.base64urlToArrayBuffer(options.challenge);
@@ -182,8 +247,12 @@ const webAuthn = {
             });
         })
         .then(response => {
+            this.log(`Response status: ${response.status}`);
             if (!response.ok) {
-                throw new Error(`Failed to complete registration (${response.status})`);
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to complete registration (${response.status}): ${text}`);
+                });
             }
             return response.json();
         })
@@ -220,19 +289,26 @@ const webAuthn = {
         this.log(`Using login options URL: ${loginOptionsUrl}`);
 
         // Step 1: Get login options from server
-        fetch(loginOptionsUrl, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json'
+        this.debugFetch(
+            loginOptionsUrl,
+            {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ timestamp: Date.now() })
+            },
+            response => {
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        this.log(`Error response: ${text}`);
+                        throw new Error(`Failed to get login options (${response.status}): ${text}`);
+                    });
+                }
+                return response.json();
             }
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Failed to get login options (${response.status})`);
-            }
-            return response.json();
-        })
+        )
         .then(options => {
             this.log(`Received login options: ${JSON.stringify(options).substring(0, 100)}...`);
             
@@ -302,8 +378,12 @@ const webAuthn = {
             });
         })
         .then(response => {
+            this.log(`Response status: ${response.status}`);
             if (!response.ok) {
-                throw new Error(`Failed to complete login (${response.status})`);
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to complete login (${response.status}): ${text}`);
+                });
             }
             return response.json();
         })
@@ -335,11 +415,19 @@ const webAuthn = {
         
         fetch(logoutUrl, {
             method: 'POST',
-            credentials: 'include'
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ timestamp: Date.now() })
         })
         .then(response => {
+            this.log(`Response status: ${response.status}`);
             if (!response.ok) {
-                throw new Error(`Failed to logout (${response.status})`);
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to logout (${response.status}): ${text}`);
+                });
             }
             return response.json();
         })
@@ -367,8 +455,12 @@ const webAuthn = {
             credentials: 'include'
         })
         .then(response => {
+            this.log(`Response status: ${response.status}`);
             if (!response.ok) {
-                throw new Error(`Failed to check auth status (${response.status})`);
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to check auth status (${response.status}): ${text}`);
+                });
             }
             return response.json();
         })
@@ -498,8 +590,12 @@ const webAuthn = {
                 body: JSON.stringify({ message: message })
             })
             .then(response => {
+                this.log(`Response status: ${response.status}`);
                 if (!response.ok) {
-                    throw new Error(`Failed to send message (${response.status})`);
+                    return response.text().then(text => {
+                        this.log(`Error response: ${text}`);
+                        throw new Error(`Failed to send message (${response.status}): ${text}`);
+                    });
                 }
                 return response.json();
             })

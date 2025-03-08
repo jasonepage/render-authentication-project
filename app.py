@@ -652,37 +652,55 @@ def bytes_to_base64url(bytes_value):
 @app.route('/static/register_options', methods=['POST'])
 def register_options_alias():
     """Alias for register_options to ensure proper routing"""
-    print("Using register_options_alias")
+    print("\n⭐⭐⭐ USING REGISTER_OPTIONS_ALIAS ⭐⭐⭐")
+    print(f"Request content type: {request.content_type}")
+    print(f"Request content length: {request.content_length}")
+    print(f"Request headers: {dict(request.headers)}")
     return webauthn_register_options()
 
 @app.route('/static/login_options', methods=['POST'])
 def login_options_alias():
     """Alias for login_options to ensure proper routing"""
-    print("Using login_options_alias")
+    print("\n⭐⭐⭐ USING LOGIN_OPTIONS_ALIAS ⭐⭐⭐")
+    print(f"Request content type: {request.content_type}")
+    print(f"Request content length: {request.content_length}")
+    print(f"Request headers: {dict(request.headers)}")
     return webauthn_login_options()
 
 @app.route('/static/register_complete', methods=['POST'])
 def register_complete_alias():
     """Alias for register_complete to ensure proper routing"""
-    print("Using register_complete_alias")
+    print("\n⭐⭐⭐ USING REGISTER_COMPLETE_ALIAS ⭐⭐⭐")
+    print(f"Request content type: {request.content_type}")
+    print(f"Request content length: {request.content_length}")
+    print(f"Request headers: {dict(request.headers)}")
     return webauthn_register_complete()
 
 @app.route('/static/login_complete', methods=['POST'])
 def login_complete_alias():
     """Alias for login_complete to ensure proper routing"""
-    print("Using login_complete_alias")
+    print("\n⭐⭐⭐ USING LOGIN_COMPLETE_ALIAS ⭐⭐⭐")
+    print(f"Request content type: {request.content_type}")
+    print(f"Request content length: {request.content_length}")
+    print(f"Request headers: {dict(request.headers)}")
     return webauthn_login_complete()
 
 @app.route('/static/logout', methods=['POST'])
 def logout_alias():
     """Alias for logout to ensure proper routing"""
-    print("Using logout_alias")
+    print("\n⭐⭐⭐ USING LOGOUT_ALIAS ⭐⭐⭐")
+    print(f"Request content type: {request.content_type}")
+    print(f"Request content length: {request.content_length}")
+    print(f"Request headers: {dict(request.headers)}")
     return webauthn_logout()
 
 @app.route('/static/auth_status', methods=['GET'])
 def auth_status_alias():
     """Alias for auth_status to ensure proper routing"""
-    print("Using auth_status_alias")
+    print("\n⭐⭐⭐ USING AUTH_STATUS_ALIAS ⭐⭐⭐")
+    print(f"Request content type: {request.content_type}")
+    print(f"Request content length: {request.content_length}")
+    print(f"Request headers: {dict(request.headers)}")
     return webauthn_auth_status()
 
 @app.route('/register_options', methods=['POST'])
@@ -690,6 +708,11 @@ def webauthn_register_options():
     """Generate registration options for WebAuthn"""
     try:
         print("\n⭐ WEBAUTHN REGISTRATION OPTIONS ⭐")
+        
+        # Print request info for debugging
+        print(f"Request content type: {request.content_type}")
+        print(f"Request content length: {request.content_length}")
+        print(f"Request headers: {dict(request.headers)}")
         
         # Generate a random user ID if not already in session
         if 'user_id_for_registration' not in session:
@@ -852,6 +875,12 @@ def webauthn_login_options():
     """Get options for WebAuthn login"""
     try:
         print("\n⭐ WEBAUTHN LOGIN OPTIONS ⭐")
+        
+        # Print request info for debugging
+        print(f"Request content type: {request.content_type}")
+        print(f"Request content length: {request.content_length}")
+        print(f"Request headers: {dict(request.headers)}")
+        
         # Generate a challenge for this login attempt
         challenge = generate_challenge()
         session['challenge'] = challenge
