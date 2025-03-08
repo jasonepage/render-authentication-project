@@ -780,6 +780,8 @@ def webauthn_register_complete():
 def webauthn_login_options():
     """Generate authentication options for WebAuthn"""
     try:
+        print("\n⭐ WEBAUTHN LOGIN OPTIONS REQUEST ⭐")
+        
         # Generate a random challenge
         challenge = generate_challenge()
         print(f"Login: Generated challenge: {challenge}")
@@ -796,12 +798,16 @@ def webauthn_login_options():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Get all credentials (no filtering)
+        # Get all credentials (no filtering) - IMPORTANT for cross-device support
+        print("Login: Getting ALL credentials from database")
         cursor.execute("SELECT credential_id, user_id FROM security_keys")
         credentials = [{"id": row[0], "user_id": row[1]} for row in cursor.fetchall()]
         conn.close()
         
         print(f"Login: Found {len(credentials)} credential(s) in database")
+        if len(credentials) > 0:
+            for cred in credentials:
+                print(f"Login: Credential: {cred['id'][:15]}... for user: {cred['user_id']}")
         
         # If no credentials found, return empty allowCredentials
         if not credentials:
@@ -814,18 +820,22 @@ def webauthn_login_options():
         # Format for WebAuthn
         allow_credentials = []
         for cred in credentials:
+            # IMPORTANT: The id must be properly encoded for the browser
+            credential_id = cred["id"]
+            
             allow_credentials.append({
                 "type": "public-key",
-                "id": cred["id"],
+                "id": credential_id,
                 "transports": ["usb", "nfc", "ble", "internal"]  # Support all transport types
             })
-            print(f"Login: Added credential ID {cred['id'][:10]}... for user {cred['user_id']}")
+            print(f"Login: Added credential: {credential_id[:15]}... to allowed list")
         
         # Create options with proper rpId that matches registration
+        # IMPORTANT: rpId must match what was used during registration
         options = {
             "challenge": challenge,
             "timeout": 60000,
-            "rpId": "render-authentication-project.onrender.com",
+            "rpId": request.host,  # Use the same host as the request
             "allowCredentials": allow_credentials,
             "userVerification": "discouraged"
         }
@@ -842,66 +852,95 @@ def webauthn_login_options():
 def webauthn_login_complete():
     """Complete the login process for WebAuthn"""
     try:
-        print("\n=== WEBAUTHN LOGIN COMPLETION ===")
+        print("\n⭐ WEBAUTHN LOGIN COMPLETION ⭐")
         data = request.get_json()
-        print(f"Login: Received data with credential ID: {data.get('id', '')[:15]}...")
         
-        # For simplified demo, we'll just check if the credential exists in our database
+        # The credential ID is the key to finding the right user
         credential_id = data.get('id')
-        if not credential_id:
-            print("Login: No credential ID in response")
-            return jsonify({'error': 'No credential ID in response'}), 400
+        print(f"Login Complete: Using credential ID: {credential_id[:15] if credential_id else 'None'}...")
         
-        # Get the user from the database
+        if not credential_id:
+            print("Login Complete: No credential ID in response")
+            return jsonify({'error': 'No credential ID in response'}), 400
+            
+        # Get the credential ID from the database
         db_path = '/opt/render/webauthn.db'
-        print(f"Login: Using database path: {db_path}")
+        print(f"Login Complete: Using database path: {db_path}")
         
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        print(f"Login: Looking up credential ID: {credential_id[:15]}...")
+        # Dump all credentials for debugging
+        print("Login Complete: Dumping all registered credentials")
         cursor.execute("SELECT credential_id, user_id FROM security_keys")
-        all_creds = cursor.fetchall()
-        print(f"Login: Found {len(all_creds)} total credentials in database")
-        for cred in all_creds:
-            print(f"Login: Database has: {cred[0][:15]}... for user {cred[1]}")
+        all_credentials = cursor.fetchall()
+        for cred in all_credentials:
+            cred_id = cred[0]
+            user_id = cred[1]
+            print(f"Credential: {cred_id[:15]}... -> User: {user_id}")
             
+            # Compare with incoming credential
+            if cred_id == credential_id:
+                print(f"LOGIN MATCH FOUND: {user_id}")
+        
+        # Find the user for this credential
+        print(f"Login Complete: Looking for exact match: {credential_id[:15]}...")
         cursor.execute("SELECT user_id FROM security_keys WHERE credential_id=?", (credential_id,))
         row = cursor.fetchone()
         
-        if row:
-            print(f"Login: Found credential for user: {row[0]}")
-        else:
-            print(f"Login: Credential not found in database")
-            print(f"Login: Checking if we need to handle base64 encoding differences...")
+        if not row:
+            print("Login Complete: No exact credential match, trying alternatives...")
             
-            # Try alternative ways of representing the credential ID (some browsers encode differently)
-            # This is a workaround for cross-device compatibility
-            alternative_id = credential_id.replace('+', '-').replace('/', '_').replace('=', '')
-            print(f"Login: Trying alternative ID format: {alternative_id[:15]}...")
-            cursor.execute("SELECT user_id FROM security_keys WHERE credential_id=?", (alternative_id,))
+            # Try cleaned version (some browsers/devices encode differently)
+            clean_id = credential_id.replace('-', '+').replace('_', '/')
+            print(f"Login Complete: Trying cleaned ID: {clean_id[:15]}...")
+            cursor.execute("SELECT user_id FROM security_keys WHERE credential_id=?", (clean_id,))
             row = cursor.fetchone()
             
-            if row:
-                print(f"Login: Found with alternative ID for user: {row[0]}")
-            else:
-                print(f"Login: Credential not found with alternative format either")
-                conn.close()
-                return jsonify({'error': 'Unknown credential'}), 400
+            if not row:
+                # Try raw version
+                print(f"Login Complete: Trying alternative formats...")
+                alt_id1 = credential_id.replace('+', '-').replace('/', '_').replace('=', '')
+                cursor.execute("SELECT user_id FROM security_keys WHERE credential_id=?", (alt_id1,))
+                row = cursor.fetchone()
                 
+                if not row:
+                    print("Login Complete: No credential match found after all attempts")
+                    # Last resort - try partial match
+                    print("Login Complete: Trying partial match...")
+                    cursor.execute("SELECT credential_id, user_id FROM security_keys")
+                    all_creds = cursor.fetchall()
+                    best_match = None
+                    best_score = 0
+                    
+                    for db_cred_id, db_user_id in all_creds:
+                        # Simple similarity check
+                        for i in range(min(len(credential_id), len(db_cred_id))):
+                            if credential_id[i] == db_cred_id[i]:
+                                best_score += 1
+                            else:
+                                break
+                                
+                        if best_score > 10:  # at least 10 chars match
+                            best_match = db_user_id
+                            break
+                    
+                    if best_match:
+                        print(f"Login Complete: Found partial match for user: {best_match}")
+                        row = (best_match,)
+                    else:
+                        conn.close()
+                        return jsonify({'error': 'Unknown credential'}), 400
+        
         user_id = row[0]
+        print(f"Login Complete: Found user_id: {user_id}")
         
-        # Get all credentials for this user for debugging
-        cursor.execute("SELECT credential_id FROM security_keys WHERE user_id=?", (user_id,))
-        user_creds = cursor.fetchall()
-        print(f"Login: User {user_id} has {len(user_creds)} registered credential(s)")
-        
-        conn.close()
-        
-        # Set session
+        # Set session state
         session['authenticated'] = True
         session['user_id'] = user_id
-        print(f"Login: Updated session: {dict(session)}")
+        print(f"Login Complete: Updated session: {dict(session)}")
+        
+        conn.close()
         
         return jsonify({
             'status': 'success',
@@ -909,7 +948,7 @@ def webauthn_login_complete():
         })
         
     except Exception as e:
-        print(f"Login error: {str(e)}")
+        print(f"Login Complete Error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 

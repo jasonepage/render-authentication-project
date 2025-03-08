@@ -1,5 +1,5 @@
 // FIDO2 WebAuthn JavaScript Client
-// Version: 1.0
+// Version: 1.1
 // Last Modified: March 2025
 
 // Force print to ensure this file is loading
@@ -460,6 +460,52 @@ const webAuthn = {
         document.body.offsetHeight;
     },
     
+    // Direct initialization with basic event handlers - simplest approach
+    directInit() {
+        console.log("⚡DIRECT INIT - Setting up event handlers");
+        
+        // Get buttons
+        const registerButton = document.getElementById('register-button');
+        const loginButton = document.getElementById('login-button');
+        const logoutButton = document.getElementById('logout-button');
+        
+        // Log what we found
+        console.log("Register button found:", !!registerButton);
+        console.log("Login button found:", !!loginButton);
+        console.log("Logout button found:", !!logoutButton);
+        
+        // Set up button handlers directly
+        if (registerButton) {
+            console.log("ATTACHING REGISTER HANDLER");
+            registerButton.onclick = () => {
+                console.log("REGISTER BUTTON CLICKED");
+                this.registerKey();
+                return false;
+            };
+        }
+        
+        if (loginButton) {
+            console.log("ATTACHING LOGIN HANDLER");
+            loginButton.onclick = () => {
+                console.log("LOGIN BUTTON CLICKED");
+                this.loginWithKey();
+                return false;
+            };
+        }
+        
+        if (logoutButton) {
+            console.log("ATTACHING LOGOUT HANDLER");
+            logoutButton.onclick = () => {
+                console.log("LOGOUT BUTTON CLICKED");
+                this.logout();
+                return false;
+            };
+        }
+        
+        // Check auth status
+        this.checkAuthStatus();
+    },
+    
     // Initialize
     init() {
         console.log("🚀 WEBAUTHN INIT STARTING");
@@ -468,38 +514,44 @@ const webAuthn = {
         this.forceLogout().then(() => {
             console.log("🔄 Session cleared, initializing UI");
             
-            // Simple direct event handlers for reliability
-            const registerBtn = document.getElementById('register-button');
-            if (registerBtn) {
-                console.log("📝 REGISTER BUTTON FOUND!");
-                registerBtn.onclick = (e) => {
-                    console.log("🔴 REGISTER BUTTON CLICKED!");
-                    e.preventDefault();
-                    this.registerKey();
-                };
-            } else {
-                console.error("❌ REGISTER BUTTON NOT FOUND IN DOM");
-            }
+            // Use direct initialization for maximum reliability
+            this.directInit();
+            
+            // Also try the more robust approach
+            setTimeout(() => {
+                // Simple direct event handlers for reliability
+                const registerBtn = document.getElementById('register-button');
+                if (registerBtn) {
+                    console.log("📝 REGISTER BUTTON FOUND!");
+                    registerBtn.addEventListener('click', (e) => {
+                        console.log("🔴 REGISTER BUTTON CLICKED!");
+                        e.preventDefault();
+                        this.registerKey();
+                    });
+                } else {
+                    console.error("❌ REGISTER BUTTON NOT FOUND IN DOM");
+                }
 
-            const loginBtn = document.getElementById('login-button');
-            if (loginBtn) {
-                console.log("📝 LOGIN BUTTON FOUND!");
-                loginBtn.onclick = (e) => {
-                    console.log("🔴 LOGIN BUTTON CLICKED!");
-                    e.preventDefault();
-                    this.loginWithKey();
-                };
-            }
+                const loginBtn = document.getElementById('login-button');
+                if (loginBtn) {
+                    console.log("📝 LOGIN BUTTON FOUND!");
+                    loginBtn.addEventListener('click', (e) => {
+                        console.log("🔴 LOGIN BUTTON CLICKED!");
+                        e.preventDefault();
+                        this.loginWithKey();
+                    });
+                }
 
-            const logoutBtn = document.getElementById('logout-button');
-            if (logoutBtn) {
-                console.log("📝 LOGOUT BUTTON FOUND!");
-                logoutBtn.onclick = (e) => {
-                    console.log("🔴 LOGOUT BUTTON CLICKED!");
-                    e.preventDefault();
-                    this.logout();
-                };
-            }
+                const logoutBtn = document.getElementById('logout-button');
+                if (logoutBtn) {
+                    console.log("📝 LOGOUT BUTTON FOUND!");
+                    logoutBtn.addEventListener('click', (e) => {
+                        console.log("🔴 LOGOUT BUTTON CLICKED!");
+                        e.preventDefault();
+                        this.logout();
+                    });
+                }
+            }, 1000);
             
             // Update UI immediately before checking status
             this.isAuthenticated = false;
@@ -522,4 +574,41 @@ document.addEventListener('DOMContentLoaded', () => {
 if (document.readyState === 'complete' || document.readyState === 'interactive') {
     console.log("⚡ DOM ALREADY LOADED - INITIALIZING WEBAUTHN IMMEDIATELY");
     setTimeout(() => webAuthn.init(), 100);
-} 
+}
+
+// Direct attachment of event handlers to button elements - most reliable approach
+window.addEventListener('load', () => {
+    console.log("🌐 WINDOW LOADED - DIRECT EVENT ATTACHMENT");
+    
+    // Direct approach - get elements and set onclick handlers
+    const registerButton = document.getElementById('register-button');
+    const loginButton = document.getElementById('login-button');
+    const logoutButton = document.getElementById('logout-button');
+    
+    if (registerButton) {
+        registerButton.onclick = function(e) {
+            e.preventDefault();
+            console.log("📣 REGISTER CLICK (direct)");
+            webAuthn.registerKey();
+            return false;
+        };
+    }
+    
+    if (loginButton) {
+        loginButton.onclick = function(e) {
+            e.preventDefault();
+            console.log("📣 LOGIN CLICK (direct)");
+            webAuthn.loginWithKey();
+            return false;
+        };
+    }
+    
+    if (logoutButton) {
+        logoutButton.onclick = function(e) {
+            e.preventDefault();
+            console.log("📣 LOGOUT CLICK (direct)");
+            webAuthn.logout();
+            return false;
+        };
+    }
+}); 
