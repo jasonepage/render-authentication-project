@@ -470,35 +470,13 @@ def webauthn_register_complete():
                 print(f"Error extracting AAGUID: {e}")
                 # Continue without AAGUID if there's an error
             
-            # CRITICAL: Check if this physical key (by AAGUID) is already registered
-            # This is the most reliable way to identify the same physical key across devices
+            # Check for existing registrations using multiple methods
             existing_key = None
             
-            if aaguid:
-                # First check by AAGUID - this is the most reliable cross-device identifier
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
-                existing_key = cursor.fetchone()
-                
-                if existing_key:
-                    existing_user_id, existing_username = existing_key
-                    print(f"Found existing registration for this physical key by AAGUID: User {existing_user_id}")
-                    
-                    # Set the user as authenticated with the existing account
-                    session['authenticated'] = True
-                    session['user_id'] = existing_user_id
-                    session['username'] = existing_username or f"User-{existing_user_id[:8]}"
-                    
-                    # Return success with the existing user info
-                    return jsonify({
-                        'success': True,
-                        'message': 'This security key is already registered with another account. You have been logged in to that account.',
-                        'existing_account': True,
-                        'user_id': existing_user_id,
-                        'username': session['username']
-                    }), 200
+            # IMPORTANT: Some AAGUIDs like "a363666d74667061636b656467617474" are generic
+            # and shared across different physical keys. We need to be more selective.
             
-            # If not found by AAGUID, check by other methods
-            # Method 1: Check by exact credential ID match
+            # Method 1: First check by exact credential ID match (most reliable)
             cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
             existing_key = cursor.fetchone()
             
@@ -516,6 +494,11 @@ def webauthn_register_complete():
             # Method 4: If not found, check by combined hash
             if not existing_key:
                 cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ?", (combined_hash,))
+                existing_key = cursor.fetchone()
+                
+            # Method 5: Only use AAGUID if it's not a known generic one
+            if not existing_key and aaguid and aaguid != "a363666d74667061636b656467617474":
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
                 existing_key = cursor.fetchone()
             
             if existing_key:
@@ -725,8 +708,8 @@ def webauthn_login_complete():
                             print(f"Extracted AAGUID from authenticator data: {aaguid}")
                             break
                             
-                # If we found an AAGUID, try to find a matching account
-                if aaguid:
+                # If we found an AAGUID and it's not a known generic one, try to find a matching account
+                if aaguid and aaguid != "a363666d74667061636b656467617474":
                     cursor.execute(
                         "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE aaguid = ?", 
                         (aaguid,)
