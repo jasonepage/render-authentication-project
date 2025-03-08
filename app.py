@@ -312,14 +312,11 @@ def webauthn_register_options():
         print(f"Request content length: {request.content_length}")
         print(f"Request headers: {dict(request.headers)}")
         
-        # Generate a random user ID if not already in session
-        if 'user_id_for_registration' not in session:
-            user_id = f"user-{secrets.token_urlsafe(8)}"
-            session['user_id_for_registration'] = user_id
-            print(f"Register Options: Generated new user ID: {user_id}")
-        else:
-            user_id = session['user_id_for_registration']
-            print(f"Register Options: Using existing user ID: {user_id}")
+        # Always generate a new random user ID with a custom prefix for better readability
+        # Use a mix of alphanumeric characters to ensure uniqueness
+        user_id = f"{secrets.token_hex(4)}-{secrets.token_urlsafe(6)}"
+        session['user_id_for_registration'] = user_id
+        print(f"Register Options: Generated new user ID: {user_id}")
         
         # Generate a challenge
         challenge = generate_challenge()
@@ -448,9 +445,11 @@ def webauthn_register_complete():
         conn.commit()
         conn.close()
         
-        # Set authenticated session
+        # Set authenticated session and clean up registration data
         session['authenticated'] = True
         session['user_id'] = user_id
+        # Clear the registration-specific data to prevent reuse
+        session.pop('user_id_for_registration', None)
         print(f"Register Complete: Updated session: {dict(session)}")
         
         return jsonify({
@@ -661,12 +660,14 @@ def webauthn_logout():
     """Log out the current user"""
     print("\n=== WEBAUTHN LOGOUT REQUEST ===")
     
-    # Clear session
-    if 'authenticated' in session:
-        user_id = session.get('user_id')
+    # Get user ID for logging before clearing
+    user_id = session.get('user_id')
+    if user_id:
         print(f"Logging out user: {user_id}")
-        session.pop('authenticated', None)
-        session.pop('user_id', None)
+    
+    # Clear entire session to ensure no state is preserved
+    session.clear()
+    print("Session cleared completely")
     
     return jsonify({"status": "success", "message": "Logged out successfully"})
 
@@ -865,6 +866,68 @@ def cleanup_duplicate_credentials():
         
     except Exception as e:
         print(f"Cleanup Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/admin/prune_duplicates', methods=['POST'])
+def admin_prune_duplicates():
+    """Admin function to remove duplicate security keys by user ID"""
+    try:
+        print("\n⭐ PRUNING DUPLICATE USER IDS ⭐")
+        
+        # For security, require a secret token
+        data = request.get_json()
+        if not data or data.get('secret') != os.environ.get('ADMIN_SECRET', 'admin_secret'):
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        db_path = '/opt/render/webauthn.db'
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get user IDs and their credential count
+        cursor.execute("""
+            SELECT user_id, COUNT(*) as count 
+            FROM security_keys 
+            GROUP BY user_id
+            ORDER BY count DESC
+        """)
+        users = cursor.fetchall()
+        
+        duplicates_removed = 0
+        
+        # For users with multiple credentials, keep only the newest one
+        for user_id, count in users:
+            if count > 1:
+                print(f"User {user_id} has {count} credentials, pruning to keep newest only")
+                
+                # Get the newest credential for this user
+                cursor.execute("""
+                    SELECT credential_id, created_at 
+                    FROM security_keys 
+                    WHERE user_id = ? 
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                """, (user_id,))
+                newest = cursor.fetchone()[0]
+                
+                # Delete all but the newest credential
+                cursor.execute("""
+                    DELETE FROM security_keys 
+                    WHERE user_id = ? AND credential_id != ?
+                """, (user_id, newest))
+                
+                duplicates_removed += count - 1
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Removed {duplicates_removed} duplicate credentials"
+        })
+        
+    except Exception as e:
+        print(f"Pruning Error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
