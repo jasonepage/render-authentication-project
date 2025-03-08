@@ -309,6 +309,14 @@ def webauthn_register_options():
         host = request.host
         hostname = host.split(':')[0]  # Remove port if present
         
+        # For Render deployment use the constant rpId
+        if hostname != 'localhost' and hostname != '127.0.0.1':
+            rp_id = 'render-authentication-project.onrender.com'
+        else:
+            rp_id = hostname
+            
+        print(f"Register Options: Using rpId: {rp_id}")
+        
         # Fetch existing credentials to prevent duplicate registrations
         exclude_credentials = []
         try:
@@ -346,7 +354,7 @@ def webauthn_register_options():
             "challenge": challenge,
             "rp": {
                 "name": "FIDO2 Chat System",
-                "id": hostname
+                "id": rp_id
             },
             "user": {
                 "id": user_id,
@@ -357,6 +365,11 @@ def webauthn_register_options():
                 {"type": "public-key", "alg": -7},   # ES256
                 {"type": "public-key", "alg": -257}  # RS256
             ],
+            "authenticatorSelection": {
+                "authenticatorAttachment": "cross-platform",  # Request external security keys
+                "requireResidentKey": false,
+                "userVerification": "discouraged"  # Don't require biometrics or PIN
+            },
             "timeout": 60000,
             "attestation": "none",
             "excludeCredentials": exclude_credentials
@@ -573,7 +586,7 @@ def webauthn_login_complete():
         
         # Try both normalized and original credential ID for maximum compatibility
         cursor.execute(
-            "SELECT user_id, public_key, credential_id FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
+            "SELECT user_id, public_key, credential_id, username FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
             (normalized_credential_id, credential_id)
         )
         
@@ -582,10 +595,15 @@ def webauthn_login_complete():
         
         if not result:
             print(f"Login Error: Credential ID not found: {credential_id[:20]}...")
-            return jsonify({'error': 'Credential not recognized'}), 401
+            return jsonify({'error': 'Credential not recognized. Please register first.'}), 401
             
-        user_id, public_key_json, stored_credential_id = result
-        print(f"Login Complete: Found user ID: {user_id}")
+        user_id, public_key_json, stored_credential_id, username = result
+        
+        if not user_id:
+            print(f"Login Error: Invalid user ID for credential")
+            return jsonify({'error': 'Invalid user credential. Please register again.'}), 401
+            
+        print(f"Login Complete: Found user ID: {user_id} with username: {username or 'Unknown'}")
         
         # For this simplification, we'll just verify that we found a user
         # In a real implementation, you would verify the signature against the stored public key
@@ -594,9 +612,14 @@ def webauthn_login_complete():
         session['authenticated'] = True
         session['user_id'] = user_id
         session['credential_id'] = stored_credential_id
+        session['username'] = username or f"User-{user_id[:8]}"
         
-        print(f"Login Complete: User {user_id} successfully authenticated")
-        return jsonify({'success': True, 'user_id': user_id}), 200
+        print(f"Login Complete: User {user_id} successfully authenticated as {session['username']}")
+        return jsonify({
+            'success': True, 
+            'user_id': user_id,
+            'username': session['username']
+        }), 200
         
     except Exception as e:
         print(f"Login Error: {str(e)}")

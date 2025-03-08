@@ -230,16 +230,11 @@ const webAuthn = {
         
         this.showModal('Please insert your security key and follow the browser instructions...');
 
-        const isIOS = this.isIOS();
-        const isMac = /Mac/.test(navigator.platform);
-        
-        if (isIOS) {
-            this.log('iOS device detected, using iOS-specific settings');
-        }
-        
-        if (isMac) {
-            this.log('Mac device detected, using Mac-specific settings');
-        }
+        // Add helpful message about security key requirements
+        this.showCredentialHelp(
+            'For best security, please use a physical security key (like YubiKey or similar). ' +
+            'While platform authenticators (like Windows Hello) will work, external security keys provide stronger protection.'
+        );
 
         const registerOptionsUrl = this.getEndpointPath('register_options');
         this.log(`Using registration options URL: ${registerOptionsUrl}`);
@@ -267,79 +262,23 @@ const webAuthn = {
         )
         .then(options => {
             this.log(`Received registration options:`, options);
-            console.log("DEBUG - Raw registration options:", JSON.parse(JSON.stringify(options)));
+            this.showModal('Creating your secure credential...');
             
-            // Debug the challenge format specifically
-            console.log("DEBUG - Challenge details:", {
-                value: options.challenge,
-                type: typeof options.challenge,
-                length: options.challenge?.length || 0
-            });
+            // Convert base64url strings to ArrayBuffer as required by the WebAuthn API
+            options.challenge = this.base64urlToArrayBuffer(options.challenge);
+            options.user.id = this.base64urlToArrayBuffer(options.user.id);
             
-            // Debug the user.id format
-            if (options.user && options.user.id) {
-                console.log("DEBUG - User ID details:", {
-                    value: options.user.id,
-                    type: typeof options.user.id,
-                    length: options.user.id?.length || 0
+            // Format excludeCredentials if they exist
+            if (options.excludeCredentials && Array.isArray(options.excludeCredentials)) {
+                options.excludeCredentials = options.excludeCredentials.map(cred => {
+                    return {
+                        ...cred,
+                        id: this.base64urlToArrayBuffer(cred.id)
+                    };
                 });
             }
             
-            // Enhanced error handling and logging for challenge conversion
-            try {
-                // Make sure challenge is a string before conversion
-                if (typeof options.challenge !== 'string') {
-                    this.logWarn(`Challenge is not a string! Type: ${typeof options.challenge}`);
-                    options.challenge = String(options.challenge);
-                }
-                
-                this.log(`Converting challenge: ${options.challenge}`);
-                options.challenge = this.base64urlToArrayBuffer(options.challenge);
-                this.log(`Challenge converted successfully`);
-            } catch (e) {
-                this.logError(`Failed to convert challenge: ${e.message}`, e);
-                throw new Error(`Challenge conversion failed: ${e.message}`);
-            }
-            
-            // Enhanced handling for user.id
-            if (options.user && options.user.id) {
-                try {
-                    if (typeof options.user.id !== 'string') {
-                        this.logWarn(`User ID is not a string! Type: ${typeof options.user.id}`);
-                        options.user.id = String(options.user.id);
-                    }
-                    
-                    this.log('Converting user ID:', options.user.id);
-                    options.user.id = this.base64urlToArrayBuffer(options.user.id);
-                    this.log('User ID converted successfully');
-                } catch (e) {
-                    this.logError(`Failed to convert user.id: ${e.message}`, e);
-                    throw new Error(`User ID conversion failed: ${e.message}`);
-                }
-            }
-            
-            if (options.excludeCredentials) {
-                for (let i = 0; i < options.excludeCredentials.length; i++) {
-                    options.excludeCredentials[i].id = this.base64urlToArrayBuffer(options.excludeCredentials[i].id);
-                }
-            }
-            
-            // Mac-specific adjustments
-            if (isMac) {
-                // macOS sometimes needs specific settings
-                this.log('Applying Mac-specific adjustments');
-                options.authenticatorSelection = options.authenticatorSelection || {};
-                // Let's not be too restrictive on Mac
-                options.authenticatorSelection.requireResidentKey = false;
-                options.authenticatorSelection.userVerification = 'discouraged';
-                
-                this.log('Adjusted options for Mac compatibility', options.authenticatorSelection);
-            }
-            
-            this.log('Converted all fields, final options:', options);
-            
-            // Step 2: Create credentials using WebAuthn API
-            console.log("DEBUG - Calling navigator.credentials.create with:", JSON.parse(JSON.stringify({publicKey: options})));
+            // Request the authenticator to create a new credential
             return navigator.credentials.create({
                 publicKey: options
             }).catch(err => {
@@ -347,71 +286,60 @@ const webAuthn = {
             });
         })
         .then(credential => {
-            this.log('Credential created successfully, preparing data for server');
-            console.log("DEBUG - Raw credential object:", credential);
+            if (!credential) {
+                this.log('No credential returned - likely handled by error handler');
+                return;
+            }
             
-            // Prepare the credential data to send to server
-            try {
-                const credentialId = this.arrayBufferToBase64url(credential.rawId);
-                const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
-                const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
-                
-                console.log("DEBUG - Encoded credential data:", {
-                    credentialId: credentialId,
-                    clientDataJSON: clientDataJSON?.substring(0, 50) + "...",
-                    attestationObjectPreview: attestationObject?.substring(0, 50) + "..."
-                });
-                
-                const registerCompleteUrl = this.getEndpointPath('register_complete');
-                this.log(`Using register complete URL: ${registerCompleteUrl}`);
-                
-                // Step 3: Send credential data to server
-                return fetch(registerCompleteUrl, {
+            this.log('Credential created successfully');
+            this.showModal('Registering your credential with the server...');
+            
+            // Prepare the credential data to send to the server
+            const credentialData = {
+                id: credential.id,
+                type: credential.type,
+                response: {
+                    clientDataJSON: this.arrayBufferToBase64url(credential.response.clientDataJSON),
+                    attestationObject: this.arrayBufferToBase64url(credential.response.attestationObject)
+                }
+            };
+            
+            // Send the credential data to the server
+            return this.debugFetch(
+                this.getEndpointPath('register_complete'),
+                {
                     method: 'POST',
                     credentials: 'include',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        id: credentialId,
-                        rawId: credentialId,
-                        type: credential.type,
-                        response: {
-                            clientDataJSON: clientDataJSON,
-                            attestationObject: attestationObject
-                        }
-                    })
-                });
-            } catch (error) {
-                this.logError("Failed to process credential for submission", error);
-                throw error;
-            }
-        })
-        .then(response => {
-            this.log(`Response status: ${response.status}`);
-            if (!response.ok) {
-                return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
-                    throw new Error(`Failed to complete registration (${response.status}): ${text}`);
-                });
-            }
-            return response.json();
+                    body: JSON.stringify(credentialData)
+                },
+                response => {
+                    if (!response.ok) {
+                        return response.text().then(text => {
+                            throw new Error(`Registration failed (${response.status}): ${text}`);
+                        });
+                    }
+                    return response.json();
+                }
+            );
         })
         .then(result => {
-            this.log(`Registration complete, result: ${JSON.stringify(result)}`);
+            if (!result) return; // Already handled by error handler
+            
+            this.log('Registration successful:', result);
             this.hideModal();
+            this.showMessage('Registration successful! You are now logged in.');
             
-            // Update the UI to reflect the authenticated state
-            this.updateUI(true, result.userId);
-            
-            // Alert the user
-            alert('Security key registered successfully!');
+            // Check if we're now authenticated and update UI
+            setTimeout(() => {
+                this.checkAuthStatus();
+            }, 1000);
         })
         .catch(error => {
             this.handleRegistrationError(error);
         });
-        
-        return false; // Prevent form submission
     },
 
     // Login with a registered security key
@@ -900,18 +828,41 @@ const webAuthn = {
         }, 12000); // Show for 12 seconds
     },
 
-    // Update handleRegistrationError to also show credential help
+    // Handle registration errors and check for existing credentials
     handleRegistrationError: function(error) {
         this.logError('Registration error:', error);
         
         // Check for specific error types that indicate an existing credential
         const errorMessage = error.message || '';
+        const errorName = error.name || '';
+        
+        // Handle existing credential errors
         const isExistingCredentialError = 
             errorMessage.includes('already registered') || 
             errorMessage.includes('excludeCredentials') ||
             errorMessage.includes('credential already exists') ||
             errorMessage.includes('The authenticator is already registered') ||
-            error.name === 'InvalidStateError';
+            errorName === 'InvalidStateError';
+        
+        // Handle unsupported authenticator errors
+        const isUnsupportedAuthenticatorError =
+            errorMessage.includes('authenticator attachment') ||
+            errorMessage.includes('authenticator not supported') ||
+            errorMessage.includes('not supported by this device') ||
+            errorMessage.includes('not supported');
+        
+        // Handle user verification errors
+        const isUserVerificationError =
+            errorMessage.includes('user verification') ||
+            errorMessage.includes('verification failed');
+        
+        // Handle timeout or cancellation
+        const isTimeoutOrCancelled =
+            errorName === 'NotAllowedError' ||
+            errorMessage.includes('timeout') ||
+            errorMessage.includes('cancelled') ||
+            errorMessage.includes('canceled') ||
+            errorMessage.includes('aborted');
         
         if (isExistingCredentialError) {
             this.log('Detected existing credential - redirecting to login flow');
@@ -928,11 +879,24 @@ const webAuthn = {
             }, 2000);
             
             return;
+        } else if (isUnsupportedAuthenticatorError) {
+            this.hideModal();
+            this.showError('Your device doesn\'t support the required security key type. Please try a physical security key like YubiKey.');
+            this.showCredentialHelp('This application requires a physical security key (cross-platform authenticator). Please connect a security key to your device and try again.');
+            return;
+        } else if (isUserVerificationError) {
+            this.hideModal();
+            this.showError('User verification failed. Please try again.');
+            return;
+        } else if (isTimeoutOrCancelled) {
+            this.hideModal();
+            this.showError('Registration was cancelled or timed out. Please try again.');
+            return;
         }
         
         // Handle other registration errors
-        this.showError(`Registration failed: ${error.message}`);
         this.hideModal();
+        this.showError(`Registration failed: ${error.message}`);
     },
     
     // Initialize the application
