@@ -417,13 +417,14 @@ def webauthn_register_complete():
         
         # Extract attestation data for key identification
         attestation_object_b64 = data['response']['attestationObject']
+        client_data_json_b64 = data['response']['clientDataJSON']
         
         # Check if this physical key is already registered (by attestation)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         try:
-            # First, check if we have an attestation_hash column
+            # First, check if we have the necessary columns
             cursor.execute("PRAGMA table_info(security_keys)")
             columns = [col[1] for col in cursor.fetchall()]
             
@@ -432,14 +433,72 @@ def webauthn_register_complete():
                 print("Adding attestation_hash column to security_keys table")
                 cursor.execute("ALTER TABLE security_keys ADD COLUMN attestation_hash TEXT")
                 conn.commit()
+                
+            # Add aaguid column if it doesn't exist (for better cross-device identification)
+            if 'aaguid' not in columns:
+                print("Adding aaguid column to security_keys table")
+                cursor.execute("ALTER TABLE security_keys ADD COLUMN aaguid TEXT")
+                conn.commit()
+                
+            # Add raw_id column if it doesn't exist (for additional matching)
+            if 'raw_id' not in columns:
+                print("Adding raw_id column to security_keys table")
+                cursor.execute("ALTER TABLE security_keys ADD COLUMN raw_id TEXT")
+                conn.commit()
             
-            # Generate a hash of the attestation object to identify the physical key
+            # Generate multiple identifiers for the physical key
+            # 1. Primary attestation hash (from attestation object)
             attestation_hash = hashlib.sha256(attestation_object_b64.encode()).hexdigest()
-            print(f"Generated attestation hash: {attestation_hash[:20]}...")
             
-            # Check if this physical key is already registered
+            # 2. Secondary hash (combination of attestation and client data)
+            combined_hash = hashlib.sha256((attestation_object_b64 + client_data_json_b64).encode()).hexdigest()
+            
+            # 3. Raw ID for additional matching
+            raw_id = credential_id
+            
+            print(f"Generated attestation hash: {attestation_hash[:20]}...")
+            print(f"Generated combined hash: {combined_hash[:20]}...")
+            
+            # Try to extract AAGUID from attestation (if possible)
+            aaguid = None
+            try:
+                # This is a simplified approach - in production you'd use a proper CBOR parser
+                # to extract the AAGUID from the attestation object
+                attestation_bytes = base64url_to_bytes(attestation_object_b64)
+                # Look for patterns that might contain the AAGUID
+                for i in range(len(attestation_bytes) - 16):
+                    # Check if this could be an AAGUID (16 bytes, typically non-zero)
+                    potential_aaguid = attestation_bytes[i:i+16]
+                    if any(b != 0 for b in potential_aaguid):
+                        aaguid_hex = potential_aaguid.hex()
+                        if aaguid_hex != "00000000000000000000000000000000":
+                            aaguid = aaguid_hex
+                            print(f"Extracted potential AAGUID: {aaguid}")
+                            break
+            except Exception as e:
+                print(f"Error extracting AAGUID: {e}")
+            
+            # Check for existing registrations using multiple methods
+            existing_key = None
+            
+            # Method 1: Check by attestation hash
             cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
             existing_key = cursor.fetchone()
+            
+            # Method 2: If not found, check by combined hash
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (combined_hash,))
+                existing_key = cursor.fetchone()
+            
+            # Method 3: If not found and we have an AAGUID, check by AAGUID
+            if not existing_key and aaguid:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
+                existing_key = cursor.fetchone()
+            
+            # Method 4: Last resort - check by raw ID
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE raw_id = ?", (raw_id,))
+                existing_key = cursor.fetchone()
             
             if existing_key:
                 existing_user_id, existing_username = existing_key
@@ -460,6 +519,7 @@ def webauthn_register_complete():
                 }), 200
         except Exception as e:
             print(f"Error checking for existing key: {e}")
+            print(traceback.format_exc())
             # Continue with registration if there's an error checking
             
         # For this simplification, we'll just store the credential without complex validation
@@ -491,30 +551,49 @@ def webauthn_register_complete():
                 # Generate attestation hash if not already done
                 if 'attestation_hash' not in locals():
                     attestation_hash = hashlib.sha256(attestation_object_b64.encode()).hexdigest()
+                    combined_hash = hashlib.sha256((attestation_object_b64 + client_data_json_b64).encode()).hexdigest()
                 
-                if 'username' in columns and 'attestation_hash' in columns:
-                    # Store with username and attestation hash
-                    print(f"Register Complete: Storing credential with username and attestation hash")
-                    cursor.execute(
-                        "INSERT INTO security_keys (credential_id, user_id, username, public_key, attestation_hash, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                        (normalized_credential_id, user_id, initial_username, public_key, attestation_hash)
-                    )
-                elif 'username' in columns:
-                    # Store with username if the column exists
-                    print(f"Register Complete: Storing credential with username")
-                    cursor.execute(
-                        "INSERT INTO security_keys (credential_id, user_id, username, public_key, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                        (normalized_credential_id, user_id, initial_username, public_key)
-                    )
-                else:
-                    # Store without username if the column doesn't exist
-                    print(f"Register Complete: Storing credential without username")
-                    cursor.execute(
-                        "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
-                        (normalized_credential_id, user_id, public_key)
-                    )
+                # Prepare insertion with all available columns
+                insert_columns = ["credential_id", "user_id", "public_key", "created_at"]
+                insert_values = [normalized_credential_id, user_id, public_key, "datetime('now')"]
+                
+                # Add username if column exists
+                if 'username' in columns:
+                    insert_columns.append("username")
+                    insert_values.append(initial_username)
+                
+                # Add attestation_hash if column exists
+                if 'attestation_hash' in columns:
+                    insert_columns.append("attestation_hash")
+                    insert_values.append(attestation_hash)
+                
+                # Add combined_hash as a secondary attestation hash if column exists
+                if 'combined_hash' in columns:
+                    insert_columns.append("combined_hash")
+                    insert_values.append(combined_hash)
+                
+                # Add AAGUID if we extracted it and column exists
+                if aaguid and 'aaguid' in columns:
+                    insert_columns.append("aaguid")
+                    insert_values.append(aaguid)
+                
+                # Add raw_id if column exists
+                if 'raw_id' in columns:
+                    insert_columns.append("raw_id")
+                    insert_values.append(raw_id)
+                
+                # Build and execute the dynamic INSERT query
+                columns_str = ", ".join(insert_columns)
+                placeholders = ", ".join(["?"] * len(insert_values))
+                
+                query = f"INSERT INTO security_keys ({columns_str}) VALUES ({placeholders})"
+                print(f"Register Complete: Executing query: {query}")
+                
+                cursor.execute(query, insert_values)
+                
             except sqlite3.Error as e:
                 print(f"Register Complete Error: Database error: {e}")
+                print(traceback.format_exc())
                 # Fallback to basic insertion without username
                 try:
                     cursor.execute(
@@ -524,8 +603,6 @@ def webauthn_register_complete():
                 except sqlite3.Error as insert_error:
                     print(f"Register Complete Critical Error: Could not insert credential: {insert_error}")
                     conn.rollback()
-                    conn.close()
-                    return jsonify({'error': 'Database error during registration'}), 500
 
         conn.commit()
         conn.close()
@@ -842,65 +919,84 @@ def debug_all():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Check if attestation_hash column exists
+        # Get schema information
         cursor.execute("PRAGMA table_info(security_keys)")
-        columns = [col[1] for col in cursor.fetchall()]
-        has_attestation_hash = 'attestation_hash' in columns
+        columns_info = cursor.fetchall()
+        columns = [col[1] for col in columns_info]
+        debug_data["security_keys_schema"] = [{"name": col[1], "type": col[2]} for col in columns_info]
         
-        # Adjust query based on schema
-        if has_attestation_hash:
-            cursor.execute("SELECT credential_id, user_id, username, public_key, attestation_hash, created_at FROM security_keys")
-        else:
-            cursor.execute("SELECT credential_id, user_id, username, public_key, created_at FROM security_keys")
+        # Build query dynamically based on available columns
+        select_columns = ["credential_id", "user_id", "username", "public_key", "created_at"]
         
-        keys = []
-        for row in cursor.fetchall():
-            # Detailed credential info for debugging
-            credential_id = row[0]
-            user_id = row[1]
-            username = row[2]
-            public_key = row[3]
+        # Add optional columns if they exist
+        if "attestation_hash" in columns:
+            select_columns.append("attestation_hash")
+        if "aaguid" in columns:
+            select_columns.append("aaguid")
+        if "raw_id" in columns:
+            select_columns.append("raw_id")
+        if "combined_hash" in columns:
+            select_columns.append("combined_hash")
             
-            if has_attestation_hash:
-                attestation_hash = row[4]
-                created_at = row[5]
-            else:
-                attestation_hash = None
-                created_at = row[4]
+        # Build and execute query
+        query = f"SELECT {', '.join(select_columns)} FROM security_keys"
+        cursor.execute(query)
+        
+        # Process results
+        rows = cursor.fetchall()
+        for row in rows:
+            # Create a dictionary to store credential info
+            credential_info = {}
+            
+            # Process basic fields
+            credential_info["credential_id"] = row[0]
+            credential_info["credential_id_length"] = len(row[0])
+            credential_info["user_id"] = row[1]
+            credential_info["username"] = row[2]
+            credential_info["public_key_snippet"] = str(row[3])[:30] + "..." if row[3] else None
+            credential_info["created_at"] = row[4]
             
             # Check if credential_id is valid base64url
             credential_valid = True
             try:
                 # Try to decode the credential_id to check if it's valid
-                padded = credential_id + '=' * ((4 - len(credential_id) % 4) % 4)
+                padded = row[0] + '=' * ((4 - len(row[0]) % 4) % 4)
                 standard = padded.replace('-', '+').replace('_', '/') 
                 base64.b64decode(standard)
             except Exception as e:
                 credential_valid = False
             
-            keys.append({
-                "credential_id": credential_id,
-                "credential_id_length": len(credential_id),
-                "credential_valid_base64": credential_valid,
-                "user_id": user_id,
-                "username": username,
-                "attestation_hash": attestation_hash[:20] + "..." if attestation_hash else None,
-                "public_key_snippet": str(public_key)[:30] + "..." if public_key else None,
-                "created_at": created_at
-            })
-        debug_data["security_keys"] = keys
+            credential_info["credential_valid_base64"] = credential_valid
+            
+            # Add optional fields if they exist
+            col_index = 5
+            if "attestation_hash" in columns:
+                credential_info["attestation_hash"] = row[col_index][:20] + "..." if row[col_index] else None
+                col_index += 1
+            
+            if "aaguid" in columns:
+                credential_info["aaguid"] = row[col_index] if row[col_index] else None
+                col_index += 1
+                
+            if "raw_id" in columns:
+                credential_info["raw_id"] = row[col_index][:20] + "..." if row[col_index] else None
+                col_index += 1
+                
+            if "combined_hash" in columns:
+                credential_info["combined_hash"] = row[col_index][:20] + "..." if row[col_index] else None
+                col_index += 1
+            
+            # Add to results
+            debug_data["security_keys"].append(credential_info)
         
         # Add database info
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         debug_data["database_tables"] = [row[0] for row in cursor.fetchall()]
         
-        # Add schema info for security_keys table
-        cursor.execute("PRAGMA table_info(security_keys)")
-        debug_data["security_keys_schema"] = [{"name": row[1], "type": row[2]} for row in cursor.fetchall()]
-        
         conn.close()
     except Exception as e:
         debug_data["error"] = str(e)
+        debug_data["traceback"] = traceback.format_exc()
     
     return jsonify(debug_data)
 
