@@ -470,10 +470,35 @@ def webauthn_register_complete():
                 print(f"Error extracting AAGUID: {e}")
                 # Continue without AAGUID if there's an error
             
-            # Check for existing registrations using multiple methods
+            # CRITICAL: Check if this physical key (by AAGUID) is already registered
+            # This is the most reliable way to identify the same physical key across devices
             existing_key = None
             
-            # Method 1: First check by exact credential ID match
+            if aaguid:
+                # First check by AAGUID - this is the most reliable cross-device identifier
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
+                existing_key = cursor.fetchone()
+                
+                if existing_key:
+                    existing_user_id, existing_username = existing_key
+                    print(f"Found existing registration for this physical key by AAGUID: User {existing_user_id}")
+                    
+                    # Set the user as authenticated with the existing account
+                    session['authenticated'] = True
+                    session['user_id'] = existing_user_id
+                    session['username'] = existing_username or f"User-{existing_user_id[:8]}"
+                    
+                    # Return success with the existing user info
+                    return jsonify({
+                        'success': True,
+                        'message': 'This security key is already registered with another account. You have been logged in to that account.',
+                        'existing_account': True,
+                        'user_id': existing_user_id,
+                        'username': session['username']
+                    }), 200
+            
+            # If not found by AAGUID, check by other methods
+            # Method 1: Check by exact credential ID match
             cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
             existing_key = cursor.fetchone()
             
@@ -495,7 +520,7 @@ def webauthn_register_complete():
             
             if existing_key:
                 existing_user_id, existing_username = existing_key
-                print(f"Found existing registration for this physical key: User {existing_user_id}")
+                print(f"Found existing registration for this credential: User {existing_user_id}")
                 
                 # Set the user as authenticated with the existing account
                 session['authenticated'] = True
@@ -671,7 +696,7 @@ def webauthn_login_complete():
         
         # Try both normalized and original credential ID for maximum compatibility
         cursor.execute(
-            "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
+            "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
             (normalized_credential_id, credential_id)
         )
         
@@ -682,20 +707,52 @@ def webauthn_login_complete():
         if not result:
             print(f"Login Error: Credential ID not found directly: {credential_id[:20]}...")
             
-            # Check if we have user_id in the assertion response (for resident keys)
-            user_handle = data.get('response', {}).get('userHandle')
+            # Try to extract AAGUID from the authenticator data
+            authenticator_data = data['response'].get('authenticatorData', '')
+            aaguid = None
             
-            if user_handle:
-                print(f"Login Complete: Found user handle in assertion: {user_handle}")
-                # Try to find the user by user_id
-                cursor.execute(
-                    "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE user_id = ?", 
-                    (user_handle,)
-                )
-                result = cursor.fetchone()
+            try:
+                # Try to extract AAGUID from authenticator data
+                auth_bytes = base64url_to_bytes(authenticator_data)
                 
-                if result:
-                    print(f"Login Complete: Found user by user handle")
+                # Look for AAGUID pattern (16 bytes, typically non-zero)
+                for i in range(len(auth_bytes) - 16):
+                    potential_aaguid = auth_bytes[i:i+16]
+                    if any(b != 0 for b in potential_aaguid):
+                        aaguid_hex = potential_aaguid.hex()
+                        if aaguid_hex != "00000000000000000000000000000000":
+                            aaguid = aaguid_hex
+                            print(f"Extracted AAGUID from authenticator data: {aaguid}")
+                            break
+                            
+                # If we found an AAGUID, try to find a matching account
+                if aaguid:
+                    cursor.execute(
+                        "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE aaguid = ?", 
+                        (aaguid,)
+                    )
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        print(f"Login Complete: Found account by AAGUID match")
+            except Exception as e:
+                print(f"Error extracting AAGUID from authenticator data: {e}")
+            
+            # Check if we have user_id in the assertion response (for resident keys)
+            if not result:
+                user_handle = data.get('response', {}).get('userHandle')
+                
+                if user_handle:
+                    print(f"Login Complete: Found user handle in assertion: {user_handle}")
+                    # Try to find the user by user_id
+                    cursor.execute(
+                        "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE user_id = ?", 
+                        (user_handle,)
+                    )
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        print(f"Login Complete: Found user by user handle")
             
             if not result:
                 print(f"Login Error: Could not find matching credential")
@@ -708,6 +765,7 @@ def webauthn_login_complete():
         stored_credential_id = result[2]
         username = result[3]
         is_resident_key = result[4] if len(result) > 4 else True  # Default to true for resident keys
+        aaguid = result[5] if len(result) > 5 else None
         
         if not user_id:
             print(f"Login Error: Invalid user ID for credential")
@@ -716,6 +774,8 @@ def webauthn_login_complete():
             
         print(f"Login Complete: Found user ID: {user_id} with username: {username or 'Unknown'}")
         print(f"Login Complete: Is resident key: {is_resident_key}")
+        if aaguid:
+            print(f"Login Complete: AAGUID: {aaguid}")
         
         # For this simplification, we'll just verify that we found a user
         # In a real implementation, you would verify the signature against the stored public key
@@ -1023,7 +1083,7 @@ def force_cleanup_credentials():
             # Drop and recreate the security_keys table with all columns
             cursor.execute("DROP TABLE IF EXISTS security_keys")
             
-            # Create the security_keys table with only essential columns
+            # Create the security_keys table with all necessary columns
             cursor.execute("""
             CREATE TABLE security_keys (
                 credential_id TEXT PRIMARY KEY,
