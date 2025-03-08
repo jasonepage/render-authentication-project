@@ -338,7 +338,7 @@ def webauthn_register_options():
             print(f"Register Options: Error getting credentials to exclude: {e}")
             # Continue without exclusion if there's an error
             
-        # Create the options - always use resident keys
+        # Create the options - always use resident keys with strong user verification
         options = {
             "challenge": challenge,
             "rp": {
@@ -358,7 +358,7 @@ def webauthn_register_options():
                 "authenticatorAttachment": "cross-platform",  # Request external security keys
                 "requireResidentKey": True,  # Always require resident keys
                 "residentKey": "required",   # Make it required, not just preferred
-                "userVerification": "preferred"  # Encourage user verification for better security
+                "userVerification": "required"  # Require user verification for better security
             },
             "timeout": 60000,
             "attestation": "direct",  # Request attestation to help identify the authenticator
@@ -473,37 +473,29 @@ def webauthn_register_complete():
             # Check for existing registrations using multiple methods
             existing_key = None
             
-            # IMPORTANT: Some AAGUIDs like "a363666d74667061636b656467617474" are generic
-            # and shared across different physical keys. We need to be more selective.
-            
-            # Method 1: First check by exact credential ID match (most reliable)
-            cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
+            # Method 1: First check by attestation hash - most reliable for identifying the same physical key
+            cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
             existing_key = cursor.fetchone()
             
-            # Method 2: If not found, check by normalized credential ID
+            # Method 2: If not found, check by combined hash
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ?", (combined_hash,))
+                existing_key = cursor.fetchone()
+            
+            # Method 3: If not found, check by credential ID (for resident keys that present the same credential ID)
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
+                existing_key = cursor.fetchone()
+            
+            # Method 4: If not found, check by normalized credential ID
             if not existing_key:
                 normalized_credential_id = normalize_credential_id(credential_id)
                 cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
                 existing_key = cursor.fetchone()
             
-            # Method 3: If not found, check by attestation hash
-            if not existing_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
-                existing_key = cursor.fetchone()
-                
-            # Method 4: If not found, check by combined hash
-            if not existing_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ?", (combined_hash,))
-                existing_key = cursor.fetchone()
-                
-            # Method 5: Only use AAGUID if it's not a known generic one
-            if not existing_key and aaguid and aaguid != "a363666d74667061636b656467617474":
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
-                existing_key = cursor.fetchone()
-            
             if existing_key:
                 existing_user_id, existing_username = existing_key
-                print(f"Found existing registration for this credential: User {existing_user_id}")
+                print(f"Found existing registration for this physical key: User {existing_user_id}")
                 
                 # Set the user as authenticated with the existing account
                 session['authenticated'] = True
@@ -637,7 +629,7 @@ def webauthn_login_options():
             "challenge": challenge,
             "timeout": 60000,  # 1 minute
             "rpId": hostname,
-            "userVerification": "preferred"
+            "userVerification": "required"  # Require user verification for better security
         }
         
         print("Login Options: Using resident key mode (no allowCredentials)")
@@ -679,7 +671,7 @@ def webauthn_login_complete():
         
         # Try both normalized and original credential ID for maximum compatibility
         cursor.execute(
-            "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
+            "SELECT user_id, public_key, credential_id, username, is_resident_key, attestation_hash FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
             (normalized_credential_id, credential_id)
         )
         
@@ -690,52 +682,40 @@ def webauthn_login_complete():
         if not result:
             print(f"Login Error: Credential ID not found directly: {credential_id[:20]}...")
             
-            # Try to extract AAGUID from the authenticator data
-            authenticator_data = data['response'].get('authenticatorData', '')
-            aaguid = None
-            
-            try:
-                # Try to extract AAGUID from authenticator data
-                auth_bytes = base64url_to_bytes(authenticator_data)
-                
-                # Look for AAGUID pattern (16 bytes, typically non-zero)
-                for i in range(len(auth_bytes) - 16):
-                    potential_aaguid = auth_bytes[i:i+16]
-                    if any(b != 0 for b in potential_aaguid):
-                        aaguid_hex = potential_aaguid.hex()
-                        if aaguid_hex != "00000000000000000000000000000000":
-                            aaguid = aaguid_hex
-                            print(f"Extracted AAGUID from authenticator data: {aaguid}")
-                            break
-                            
-                # If we found an AAGUID and it's not a known generic one, try to find a matching account
-                if aaguid and aaguid != "a363666d74667061636b656467617474":
-                    cursor.execute(
-                        "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE aaguid = ?", 
-                        (aaguid,)
-                    )
-                    result = cursor.fetchone()
-                    
-                    if result:
-                        print(f"Login Complete: Found account by AAGUID match")
-            except Exception as e:
-                print(f"Error extracting AAGUID from authenticator data: {e}")
-            
             # Check if we have user_id in the assertion response (for resident keys)
-            if not result:
-                user_handle = data.get('response', {}).get('userHandle')
+            # This is the most reliable way to identify the same user across devices with resident keys
+            user_handle = data.get('response', {}).get('userHandle')
+            
+            if user_handle:
+                print(f"Login Complete: Found user handle in assertion: {user_handle}")
+                # Try to find the user by user_id
+                cursor.execute(
+                    "SELECT user_id, public_key, credential_id, username, is_resident_key, attestation_hash FROM security_keys WHERE user_id = ?", 
+                    (user_handle,)
+                )
+                result = cursor.fetchone()
                 
-                if user_handle:
-                    print(f"Login Complete: Found user handle in assertion: {user_handle}")
-                    # Try to find the user by user_id
+                if result:
+                    print(f"Login Complete: Found user by user handle")
+            
+            # If still not found, try to extract attestation hash from authenticator data
+            if not result:
+                authenticator_data = data['response'].get('authenticatorData', '')
+                
+                if authenticator_data:
+                    # Generate a hash from the authenticator data
+                    auth_data_hash = hashlib.sha256(authenticator_data.encode()).hexdigest()
+                    print(f"Generated auth data hash: {auth_data_hash[:20]}...")
+                    
+                    # Try to find a matching attestation hash
                     cursor.execute(
-                        "SELECT user_id, public_key, credential_id, username, is_resident_key, aaguid FROM security_keys WHERE user_id = ?", 
-                        (user_handle,)
+                        "SELECT user_id, public_key, credential_id, username, is_resident_key, attestation_hash FROM security_keys WHERE attestation_hash = ?", 
+                        (auth_data_hash,)
                     )
                     result = cursor.fetchone()
                     
                     if result:
-                        print(f"Login Complete: Found user by user handle")
+                        print(f"Login Complete: Found account by attestation hash match")
             
             if not result:
                 print(f"Login Error: Could not find matching credential")
@@ -748,7 +728,7 @@ def webauthn_login_complete():
         stored_credential_id = result[2]
         username = result[3]
         is_resident_key = result[4] if len(result) > 4 else True  # Default to true for resident keys
-        aaguid = result[5] if len(result) > 5 else None
+        attestation_hash = result[5] if len(result) > 5 else None
         
         if not user_id:
             print(f"Login Error: Invalid user ID for credential")
@@ -757,8 +737,8 @@ def webauthn_login_complete():
             
         print(f"Login Complete: Found user ID: {user_id} with username: {username or 'Unknown'}")
         print(f"Login Complete: Is resident key: {is_resident_key}")
-        if aaguid:
-            print(f"Login Complete: AAGUID: {aaguid}")
+        if attestation_hash:
+            print(f"Login Complete: Attestation hash: {attestation_hash[:20]}...")
         
         # For this simplification, we'll just verify that we found a user
         # In a real implementation, you would verify the signature against the stored public key
