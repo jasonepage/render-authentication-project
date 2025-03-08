@@ -157,6 +157,36 @@ def init_db():
 # Initialize database at startup
 init_db()
 
+# Simple rate limiting decorator
+def rate_limit(max_per_minute=60):
+    cache = {}
+    
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            ip = request.remote_addr
+            current_time = time.time()
+            
+            # Clean old entries
+            cache_copy = dict(cache)
+            for key, timestamps in cache_copy.items():
+                cache[key] = [t for t in timestamps if current_time - t < 60]
+                if not cache[key]:
+                    del cache[key]
+            
+            # Check rate limit
+            if ip in cache and len(cache[ip]) >= max_per_minute:
+                return jsonify({"error": "Rate limit exceeded"}), 429
+            
+            # Add this request
+            if ip not in cache:
+                cache[ip] = []
+            cache[ip].append(current_time)
+            
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
 @app.route('/')
 def index():
     """
@@ -702,36 +732,6 @@ def send_message():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
-
-# Simple rate limiting decorator
-def rate_limit(max_per_minute=60):
-    cache = {}
-    
-    def decorator(f):
-        @wraps(f)
-        def wrapper(*args, **kwargs):
-            ip = request.remote_addr
-            current_time = time.time()
-            
-            # Clean old entries
-            cache_copy = dict(cache)
-            for key, timestamps in cache_copy.items():
-                cache[key] = [t for t in timestamps if current_time - t < 60]
-                if not cache[key]:
-                    del cache[key]
-            
-            # Check rate limit
-            if ip in cache and len(cache[ip]) >= max_per_minute:
-                return jsonify({"error": "Rate limit exceeded"}), 429
-            
-            # Add this request
-            if ip not in cache:
-                cache[ip] = []
-            cache[ip].append(current_time)
-            
-            return f(*args, **kwargs)
-        return wrapper
-    return decorator
 
 if __name__ == '__main__':
     import os
