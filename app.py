@@ -367,7 +367,7 @@ def webauthn_register_options():
             ],
             "authenticatorSelection": {
                 "authenticatorAttachment": "cross-platform",  # Request external security keys
-                "requireResidentKey": false,
+                "requireResidentKey": False,
                 "userVerification": "discouraged"  # Don't require biometrics or PIN
             },
             "timeout": 60000,
