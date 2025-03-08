@@ -86,21 +86,32 @@ const webAuthn = {
         this.log(`Showing modal: ${message}`);
         const modal = document.getElementById('auth-modal');
         const modalText = document.getElementById('modal-text');
-        if (modal && modalText) {
-            modalText.textContent = message;
-            modal.style.display = 'block';
-        } else {
-            alert(message);
+        
+        if (!modal) {
+            this.log('ERROR: auth-modal element not found in DOM');
+            alert(message); // Fallback to alert if modal not found
+            return;
         }
+        
+        if (modalText) {
+            modalText.textContent = message;
+        } else {
+            this.log('WARNING: modal-text element not found in DOM');
+        }
+        
+        modal.style.display = 'block';
     },
     
     // Hide modal
     hideModal: function() {
         this.log('Hiding modal');
         const modal = document.getElementById('auth-modal');
-        if (modal) {
-            modal.style.display = 'none';
+        if (!modal) {
+            this.log('ERROR: auth-modal element not found in DOM');
+            return;
         }
+        
+        modal.style.display = 'none';
     },
 
     // Helper function for debugging fetch operations
@@ -443,43 +454,64 @@ const webAuthn = {
         return false; // Prevent form submission
     },
 
-    // Check authentication status
-    checkAuthStatus: function() {
-        this.log('Checking authentication status');
-        
-        const authStatusUrl = this.getEndpointPath('auth_status');
-        this.log(`Using auth status URL: ${authStatusUrl}`);
-        
-        fetch(authStatusUrl, {
-            method: 'GET',
-            credentials: 'include'
-        })
-        .then(response => {
-            this.log(`Response status: ${response.status}`);
-            if (!response.ok) {
-                return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
-                    throw new Error(`Failed to check auth status (${response.status}): ${text}`);
-                });
-            }
-            return response.json();
-        })
-        .then(result => {
-            this.log(`Auth status: ${JSON.stringify(result)}`);
-            this.updateUI(result.authenticated);
-        })
-        .catch(error => {
-            this.log(`Auth status error: ${error.message}`);
-            console.error('Failed to check authentication status:', error);
-            this.updateUI(false); // Assume not authenticated on error
-        });
-    },
-
-    // Update UI based on authentication state
+    // Update UI based on authentication state - with compatibility for different HTML templates
     updateUI: function(isAuthenticated) {
         this.log(`Updating UI, authenticated: ${isAuthenticated}`);
         
-        const authDiv = document.getElementById('auth-status');
+        // Look for any possible auth status element (handle both templates)
+        let authDiv = document.getElementById('auth-status');
+        
+        // If auth-status not found, try the old element structure
+        if (!authDiv) {
+            const statusMessage = document.getElementById('status-message');
+            if (statusMessage) {
+                this.log('Found status-message element instead of auth-status, using legacy UI update');
+                statusMessage.textContent = isAuthenticated ? 'You are authenticated!' : 'Not authenticated';
+                
+                // Handle button visibility in the old template
+                const registerBtn = document.getElementById('register-button');
+                const loginBtn = document.getElementById('login-button');
+                const logoutBtn = document.getElementById('logout-button');
+                
+                if (registerBtn && loginBtn && logoutBtn) {
+                    if (isAuthenticated) {
+                        registerBtn.classList.add('hidden');
+                        loginBtn.classList.add('hidden');
+                        logoutBtn.classList.remove('hidden');
+                    } else {
+                        registerBtn.classList.remove('hidden');
+                        loginBtn.classList.remove('hidden');
+                        logoutBtn.classList.add('hidden');
+                    }
+                }
+                
+                // Chat elements in old template
+                const messageInput = document.getElementById('message-input');
+                const sendButton = document.getElementById('send-button');
+                const messages = document.getElementById('messages');
+                
+                if (messageInput && sendButton) {
+                    messageInput.disabled = !isAuthenticated;
+                    sendButton.disabled = !isAuthenticated;
+                }
+                
+                if (messages) {
+                    // Clear loading message if authenticated
+                    if (isAuthenticated) {
+                        const loadingMsg = messages.querySelector('.message-loading');
+                        if (loadingMsg) loadingMsg.style.display = 'none';
+                    }
+                }
+                
+                return; // Exit early as we've handled the old template
+            }
+            
+            // If we can't find either element structure, log an error and exit
+            this.log('ERROR: No authentication status elements found in DOM');
+            return;
+        }
+        
+        // If we get here, we found the auth-status element - standard template
         const chatForm = document.getElementById('chat-form');
         const messageList = document.getElementById('message-list');
         
@@ -511,7 +543,7 @@ const webAuthn = {
         }
     },
 
-    // Start polling for chat messages
+    // Start message polling
     startMessagePolling: function() {
         this.log('Starting message polling');
         
@@ -522,7 +554,7 @@ const webAuthn = {
         }
     },
 
-    // Stop polling for chat messages
+    // Stop message polling
     stopMessagePolling: function() {
         this.log('Stopping message polling');
         
@@ -531,7 +563,7 @@ const webAuthn = {
             this.messageInterval = null;
         }
     },
-
+    
     // Fetch chat messages
     fetchMessages: function() {
         const messagesUrl = this.getEndpointPath('get_messages');
@@ -542,75 +574,140 @@ const webAuthn = {
         })
         .then(response => {
             if (!response.ok) {
-                throw new Error(`Failed to fetch messages (${response.status})`);
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to fetch messages (${response.status}): ${text}`);
+                });
             }
             return response.json();
         })
         .then(messages => {
-            const messageList = document.getElementById('message-list');
-            if (messageList) {
-                messageList.innerHTML = '';
-                
-                messages.forEach(msg => {
-                    const messageItem = document.createElement('div');
-                    messageItem.className = 'message-item';
-                    messageItem.innerHTML = `
-                        <strong>${msg.user_id}</strong>: ${msg.message} <span class="timestamp">${msg.timestamp}</span>
-                    `;
-                    messageList.appendChild(messageItem);
-                });
-                
-                // Scroll to bottom
-                messageList.scrollTop = messageList.scrollHeight;
+            // Handle both message container types
+            let messageContainer = document.getElementById('message-list');
+            if (!messageContainer) {
+                messageContainer = document.getElementById('messages');
             }
+            
+            if (!messageContainer) {
+                this.log('WARNING: No message container found in DOM');
+                return;
+            }
+            
+            // Clear existing messages
+            messageContainer.innerHTML = '';
+            
+            if (messages.length === 0) {
+                // Add a placeholder message if no messages
+                const placeholder = document.createElement('div');
+                placeholder.className = messageContainer.id === 'messages' ? 'message' : 'message-item';
+                placeholder.innerHTML = '<strong>System</strong>: No messages yet. Start chatting!';
+                messageContainer.appendChild(placeholder);
+                return;
+            }
+            
+            // Add each message
+            messages.forEach(msg => {
+                const messageElem = document.createElement('div');
+                messageElem.className = messageContainer.id === 'messages' ? 'message' : 'message-item';
+                messageElem.innerHTML = `
+                    <strong>${msg.user_id}</strong>: ${msg.message} 
+                    <span class="${messageContainer.id === 'messages' ? 'time' : 'timestamp'}">${msg.timestamp}</span>
+                `;
+                messageContainer.appendChild(messageElem);
+            });
+            
+            // Scroll to bottom
+            messageContainer.scrollTop = messageContainer.scrollHeight;
         })
         .catch(error => {
-            console.error(`Failed to fetch messages: ${error.message}`);
+            this.log(`Message fetch error: ${error.message}`);
         });
     },
-
-    // Send a chat message
+    
+    // Send a chat message with compatibility for both UI styles
     sendMessage: function(event) {
-        event.preventDefault();
-        
-        const messageInput = document.getElementById('message-input');
-        const message = messageInput.value.trim();
-        
-        if (message) {
-            this.log(`Sending message: ${message}`);
-            
-            const sendMessageUrl = this.getEndpointPath('send_message');
-            
-            fetch(sendMessageUrl, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ message: message })
-            })
-            .then(response => {
-                this.log(`Response status: ${response.status}`);
-                if (!response.ok) {
-                    return response.text().then(text => {
-                        this.log(`Error response: ${text}`);
-                        throw new Error(`Failed to send message (${response.status}): ${text}`);
-                    });
-                }
-                return response.json();
-            })
-            .then(result => {
-                this.log('Message sent successfully');
-                messageInput.value = '';
-                this.fetchMessages(); // Update messages immediately
-            })
-            .catch(error => {
-                this.log(`Send message error: ${error.message}`);
-                alert(`Failed to send message: ${error.message}`);
-            });
+        if (event) {
+            event.preventDefault();
         }
+        
+        // Check for message input in either UI style
+        let messageInput = document.getElementById('message-input');
+        if (!messageInput) {
+            this.log('ERROR: message input element not found');
+            return false;
+        }
+        
+        const message = messageInput.value.trim();
+        if (!message) {
+            return false;
+        }
+        
+        this.log(`Sending message: ${message}`);
+        
+        const sendMessageUrl = this.getEndpointPath('send_message');
+        
+        fetch(sendMessageUrl, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ message: message })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to send message (${response.status}): ${text}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log('Message sent successfully');
+            messageInput.value = '';
+            this.fetchMessages(); // Update messages immediately
+        })
+        .catch(error => {
+            this.log(`Send message error: ${error.message}`);
+            alert(`Failed to send message: ${error.message}`);
+        });
+        
+        return false;
     },
-
+    
+    // Check authentication status
+    checkAuthStatus: function() {
+        this.log('Checking authentication status');
+        
+        const authStatusUrl = this.getEndpointPath('auth_status');
+        this.log(`Using auth status URL: ${authStatusUrl}`);
+        
+        fetch(authStatusUrl, {
+            method: 'GET',
+            credentials: 'include'
+        })
+        .then(response => {
+            this.log(`Response status: ${response.status}`);
+            if (!response.ok) {
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to check auth status (${response.status}): ${text}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log(`Auth status: ${JSON.stringify(result)}`);
+            this.updateUI(result.authenticated);
+        })
+        .catch(error => {
+            this.log(`Auth status error: ${error.message}`);
+            console.error('Failed to check authentication status:', error);
+            this.updateUI(false); // Assume not authenticated on error
+        });
+    },
+    
     // Initialize the application
     init: function() {
         this.log('Initializing WebAuthn client');
@@ -624,15 +721,49 @@ const webAuthn = {
             this.log('iOS-specific optimizations will be applied');
         }
         
+        // Log DOM availability for debugging
+        this.log('DOM elements:');
+        const elements = {
+            'auth-status': document.getElementById('auth-status'),
+            'status-message': document.getElementById('status-message'),
+            'auth-modal': document.getElementById('auth-modal'),
+            'modal': document.getElementById('modal'),
+            'modal-text': document.getElementById('modal-text'),
+            'modal-message': document.getElementById('modal-message'),
+            'message-list': document.getElementById('message-list'),
+            'messages': document.getElementById('messages'),
+            'chat-form': document.getElementById('chat-form'),
+            'message-input': document.getElementById('message-input'),
+            'send-button': document.getElementById('send-button')
+        };
+        
+        // Report which elements are missing
+        Object.entries(elements).forEach(([name, element]) => {
+            if (element) {
+                this.log(`DOM element found: #${name}`);
+            } else {
+                this.log(`Note: DOM element not found: #${name}`);
+            }
+        });
+        
         // Check authentication status on page load
         this.checkAuthStatus();
         
-        // Setup event handlers
-        const chatForm = document.getElementById('chat-form');
+        // Setup event handlers for both UI styles
+        const chatForm = elements['chat-form'];
         if (chatForm) {
             chatForm.addEventListener('submit', (event) => {
                 this.sendMessage(event);
             });
+            this.log('Chat form submit handler attached');
+        }
+        
+        const sendButton = elements['send-button'];
+        if (sendButton) {
+            sendButton.addEventListener('click', () => {
+                this.sendMessage();
+            });
+            this.log('Send button click handler attached');
         }
         
         this.log('Initialization complete');
@@ -643,4 +774,4 @@ const webAuthn = {
 document.addEventListener('DOMContentLoaded', function() {
     webAuthn.log('DOM content loaded, initializing WebAuthn client');
     webAuthn.init();
-}); 
+});

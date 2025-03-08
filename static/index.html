@@ -4,46 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FIDO2 Chat System</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>FIDO2 Chat</h1>
-            <div class="auth-status">
-                <span id="status-message">Not authenticated</span>
-                <button id="register-button" class="action-button" onclick="webAuthn.registerKey(); return false;">Register</button>
-                <button id="login-button" class="action-button" onclick="webAuthn.loginWithKey(); return false;">Login</button>
-                <button id="logout-button" class="action-button hidden" onclick="webAuthn.logout(); return false;">Logout</button>
-            </div>
+            <h1>FIDO2 Chat System</h1>
+            <p>Secure messaging with FIDO2 WebAuthn authentication</p>
         </header>
 
-        <main>
-            <div class="chat-container">
-                <div id="messages" class="messages">
-                    <!-- Messages will be displayed here -->
-                    <div class="message-loading">Loading messages...</div>
-                </div>
+        <!-- Authentication Status Section -->
+        <div id="auth-status" class="auth-section">
+            <p>Checking authentication status...</p>
+        </div>
 
-                <div class="input-container">
-                    <input type="text" id="message-input" placeholder="Type a message..." disabled>
-                    <button id="send-button" disabled>Send</button>
-                </div>
-            </div>
-        </main>
-
-        <div id="modal" class="modal hidden">
+        <!-- Modal for Authentication Operations -->
+        <div id="auth-modal" class="modal" style="display: none;">
             <div class="modal-content">
-                <span id="modal-message">Touch your Key...</span>
-                <div class="key-animation">
-                    <div class="key"></div>
-                    <div class="touch-prompt">Touch</div>
-                </div>
+                <p id="modal-text">Please follow your security key's instructions...</p>
+                <div class="spinner"></div>
             </div>
         </div>
+
+        <!-- Chat Section -->
+        <div class="chat-section">
+            <div id="message-list" class="message-list" style="display: none;">
+                <div class="message-item">
+                    <strong>System</strong>: Welcome to the secure chat! Messages will appear here.
+                </div>
+            </div>
+            
+            <form id="chat-form" class="chat-form" style="display: none;">
+                <input type="text" id="message-input" placeholder="Type your message here..." autocomplete="off">
+                <button type="submit">Send</button>
+            </form>
+        </div>
+
+        <footer>
+            <p>FIDO2 WebAuthn Authentication Demo</p>
+        </footer>
     </div>
 
     <script src="webauthn.js"></script>
-    <script src="chat.js"></script>
 </body>
 </html> 
