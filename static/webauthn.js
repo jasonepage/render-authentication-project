@@ -403,12 +403,12 @@ const webAuthn = {
         
         // Get all UI elements
         const elements = {
-            registerBtn: document.getElementById('register-btn'),
-            loginBtn: document.getElementById('login-btn'),
-            logoutBtn: document.getElementById('logout-btn'),
+            registerBtn: document.getElementById('register-button'),
+            loginBtn: document.getElementById('login-button'),
+            logoutBtn: document.getElementById('logout-button'),
             messageInput: document.getElementById('message-input'),
-            sendBtn: document.getElementById('send-btn'),
-            authStatus: document.getElementById('auth-status')
+            sendBtn: document.getElementById('send-button'),
+            authStatus: document.getElementById('status-message')
         };
 
         // Log which elements were found/not found
@@ -469,7 +469,7 @@ const webAuthn = {
             console.log("🔄 Session cleared, initializing UI");
             
             // Simple direct event handlers for reliability
-            const registerBtn = document.getElementById('register-btn');
+            const registerBtn = document.getElementById('register-button');
             if (registerBtn) {
                 console.log("📝 REGISTER BUTTON FOUND!");
                 registerBtn.onclick = (e) => {
@@ -481,7 +481,7 @@ const webAuthn = {
                 console.error("❌ REGISTER BUTTON NOT FOUND IN DOM");
             }
 
-            const loginBtn = document.getElementById('login-btn');
+            const loginBtn = document.getElementById('login-button');
             if (loginBtn) {
                 console.log("📝 LOGIN BUTTON FOUND!");
                 loginBtn.onclick = (e) => {
@@ -491,7 +491,7 @@ const webAuthn = {
                 };
             }
 
-            const logoutBtn = document.getElementById('logout-btn');
+            const logoutBtn = document.getElementById('logout-button');
             if (logoutBtn) {
                 console.log("📝 LOGOUT BUTTON FOUND!");
                 logoutBtn.onclick = (e) => {
