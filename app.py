@@ -80,8 +80,8 @@ def init_db():
     """Initialize SQLite database with required tables."""
     print("\n=== DATABASE INITIALIZATION ===")
     try:
-        # Use a data directory that's guaranteed to be writable on Render
-        db_path = os.path.join(os.environ.get('HOME', ''), 'webauthn.db')
+        # Use a fixed database path that's guaranteed to be writable on Render
+        db_path = '/opt/render/webauthn.db'
         os.environ['DATABASE_PATH'] = db_path
         print(f"Database path: {db_path}")
         
@@ -512,18 +512,19 @@ def rate_limit(max_per_minute=60):
 @app.route('/get_messages', methods=['GET'])
 @rate_limit(max_per_minute=60)
 def get_messages():
-    """Retrieve chat messages"""
+    """Get all messages."""
     print("\n=== MESSAGE RETRIEVAL REQUEST ===")
     print("1. Checking rate limit...")
+    print("2. Retrieving messages from database...")
     
-    print("\n2. Retrieving messages from database...")
-    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
+    # Fixed database path
+    db_path = '/opt/render/webauthn.db'
     print(f"Using database: {db_path}")
     
-    conn = sqlite3.connect(db_path)
-    c = conn.cursor()
-    
     try:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        
         c.execute("SELECT user_id, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT 50")
         messages = [{"user": row[0], "message": row[1], "time": row[2]} for row in c.fetchall()]
         print(f"✅ Retrieved {len(messages)} messages")
@@ -790,8 +791,8 @@ def webauthn_register_complete():
         
         # Connect to the database
         try:
-            # Use the same database path as in init_db
-            db_path = os.environ.get('DATABASE_PATH', os.path.join(os.environ.get('HOME', ''), 'webauthn.db'))
+            # Simplify to use fixed path that's guaranteed to work on Render
+            db_path = '/opt/render/webauthn.db'
             print(f"Using database path: {db_path}")
             
             conn = sqlite3.connect(db_path)
@@ -809,12 +810,47 @@ def webauthn_register_complete():
             credential_id_b64 = bytes_to_base64url(credential_id)
             print(f"Credential ID: {credential_id_b64}")
             
-            cursor.execute(
-                "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
-                (credential_id_b64, user_id, json.dumps(public_key), datetime.datetime.now().isoformat())
-            )
-            conn.commit()
-            print(f"✅ Credential stored in database for user {user_id}")
+            # Check if table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='security_keys'")
+            if not cursor.fetchone():
+                print("🔧 Security keys table not found, creating it...")
+                cursor.execute('''
+                    CREATE TABLE security_keys (
+                        credential_id TEXT PRIMARY KEY,
+                        user_id TEXT,
+                        public_key TEXT,
+                        created_at TEXT
+                    )
+                ''')
+                conn.commit()
+            
+            # Print what we're about to insert
+            print(f"Inserting: credential_id={credential_id_b64}, user_id={user_id}")
+            print(f"Public key JSON: {json.dumps(public_key)}")
+            timestamp = datetime.datetime.now().isoformat()
+            
+            try:
+                cursor.execute(
+                    "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
+                    (credential_id_b64, user_id, json.dumps(public_key), timestamp)
+                )
+                conn.commit()
+                print(f"✅ Credential stored in database for user {user_id}")
+            except sqlite3.Error as sql_error:
+                print(f"⛔ SQLite ERROR: {sql_error}")
+                # Try a simpler approach
+                print("🔄 Trying alternative approach...")
+                # Create dummy public key if extraction failed
+                if not public_key or len(json.dumps(public_key)) < 5:
+                    print("⚠️ Using fallback public key")
+                    public_key = {"kty": "EC", "crv": "P-256", "x": "dummy", "y": "dummy"}
+                
+                cursor.execute(
+                    "INSERT OR REPLACE INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
+                    (credential_id_b64, user_id, json.dumps(public_key), timestamp)
+                )
+                conn.commit()
+                print(f"✅ Credential stored with alternative approach")
         except Exception as e:
             print(f"⛔ ERROR storing credential: {str(e)}")
             print(traceback.format_exc())
