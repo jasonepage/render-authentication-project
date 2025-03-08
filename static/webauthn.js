@@ -5,19 +5,36 @@
 const webAuthn = {
     version: '1.5.0',
     
+    // Enable debug mode to see all logs
+    debugMode: true,
+    
     // Simplified endpoint path function
     getEndpointPath: function(endpoint) {
         // Always use root path for simplicity and consistency
         return `/${endpoint}`;
     },
     
-    // Streamlined logging - only logs in non-production or when debug=true is in URL
-    log: function(message) {
-        // Only log if in development or debug mode
-        if (!window.location.href.includes('render-authentication-project.onrender.com') || 
+    // Enhanced logging function
+    log: function(message, obj) {
+        // Always log in debug mode
+        if (this.debugMode || !window.location.href.includes('render-authentication-project.onrender.com') || 
             window.location.search.includes('debug=true')) {
-            console.log(`WebAuthn [${this.version}]: ${message}`);
+            if (obj) {
+                console.log(`%c WebAuthn [${this.version}]: ${message}`, 'color: #4CAF50; font-weight: bold;', obj);
+            } else {
+                console.log(`%c WebAuthn [${this.version}]: ${message}`, 'color: #4CAF50; font-weight: bold;');
+            }
         }
+    },
+    
+    // Error logging with more visibility
+    logError: function(message, error) {
+        console.error(`%c WebAuthn ERROR: ${message}`, 'color: #f44336; font-weight: bold;', error);
+    },
+    
+    // Warning logging
+    logWarn: function(message, obj) {
+        console.warn(`%c WebAuthn WARNING: ${message}`, 'color: #FF9800; font-weight: bold;', obj || '');
     },
     
     // Check if device is iOS (needed for special handling)
@@ -25,13 +42,46 @@ const webAuthn = {
         return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     },
     
-    // Base64URL to ArrayBuffer with iOS safety checks
+    // Base64URL to ArrayBuffer with more robust error handling for Mac
     base64urlToArrayBuffer: function(base64url) {
-        this.log(`Converting base64url to ArrayBuffer: ${base64url.substring(0, 20)}...`);
+        this.log(`Converting base64url to ArrayBuffer:`, base64url);
+        console.log("DEBUG - Raw base64url data:", {
+            value: base64url,
+            type: typeof base64url,
+            length: base64url?.length || 0
+        });
+        
         try {
+            // Make sure we're working with a string
+            if (typeof base64url !== 'string') {
+                throw new Error(`Input must be a string but was ${typeof base64url}`);
+            }
+            
+            // Add padding to make it a valid base64 string (required by atob)
             const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
             const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/') + padding;
-            const binary = atob(base64);
+            
+            // Debug - log the exact string being passed to atob
+            console.log("DEBUG - Processed base64 for atob:", {
+                original: base64url,
+                withPadding: base64,
+                paddingAdded: padding.length
+            });
+            
+            // Try to decode using the native atob function
+            let binary;
+            try {
+                console.log("DEBUG - Calling atob with:", base64);
+                binary = atob(base64);
+                console.log("DEBUG - atob succeeded, result length:", binary.length);
+            } catch (e) {
+                this.logError(`atob error: ${e.message}. Trying fallback approach...`, e);
+                // Try a more forgiving approach by cleaning the string
+                const cleanBase64 = base64.replace(/[^A-Za-z0-9\+\/\=]/g, '');
+                console.log("DEBUG - Fallback: cleaned base64:", cleanBase64);
+                binary = atob(cleanBase64);
+            }
+            
             const buffer = new ArrayBuffer(binary.length);
             const view = new Uint8Array(buffer);
             for (let i = 0; i < binary.length; i++) {
@@ -40,21 +90,48 @@ const webAuthn = {
             this.log(`Conversion completed, buffer length: ${buffer.byteLength}`);
             return buffer;
         } catch (error) {
-            this.log(`Error converting base64url: ${error.message}`);
+            this.logError(`Base64URL conversion failed`, error);
+            // Print detailed debugging info
+            console.error('Base64URL Conversion Failure Details:', {
+                input: base64url,
+                inputType: typeof base64url,
+                inputLength: base64url ? base64url.length : 0,
+                error: error.message,
+                stack: error.stack
+            });
             throw error;
         }
     },
     
-    // ArrayBuffer to Base64URL with iOS safety
+    // ArrayBuffer to Base64URL with improved error handling
     arrayBufferToBase64url: function(buffer) {
         this.log(`Converting ArrayBuffer to base64url, buffer length: ${buffer.byteLength}`);
         try {
+            // Ensure we have a valid ArrayBuffer
+            if (!(buffer instanceof ArrayBuffer)) {
+                throw new Error('Input must be an ArrayBuffer');
+            }
+            
             const view = new Uint8Array(buffer);
             let binary = '';
             for (let i = 0; i < view.length; i++) {
                 binary += String.fromCharCode(view[i]);
             }
-            const base64 = btoa(binary);
+            
+            // Try to use btoa to encode to base64
+            let base64;
+            try {
+                base64 = btoa(binary);
+            } catch (e) {
+                this.log(`btoa error: ${e.message}. Trying fallback approach...`);
+                // For very long strings, use a chunked approach
+                const chunks = [];
+                for (let i = 0; i < binary.length; i += 1024) {
+                    chunks.push(btoa(binary.slice(i, i + 1024)));
+                }
+                base64 = chunks.join('');
+            }
+            
             const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
             this.log(`Conversion result: ${base64url.substring(0, 20)}...`);
             return base64url;
@@ -144,11 +221,24 @@ const webAuthn = {
     // Register a new security key
     registerKey: function() {
         this.log('Starting registration process');
+        console.log('DEBUG - Browser details:', {
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            vendor: navigator.vendor,
+            webAuthnSupport: !!navigator.credentials && !!navigator.credentials.create
+        });
+        
         this.showModal('Please insert your security key and follow the browser instructions...');
 
         const isIOS = this.isIOS();
+        const isMac = /Mac/.test(navigator.platform);
+        
         if (isIOS) {
             this.log('iOS device detected, using iOS-specific settings');
+        }
+        
+        if (isMac) {
+            this.log('Mac device detected, using Mac-specific settings');
         }
 
         const registerOptionsUrl = this.getEndpointPath('register_options');
@@ -168,7 +258,7 @@ const webAuthn = {
             response => {
                 if (!response.ok) {
                     return response.text().then(text => {
-                        this.log(`Error response: ${text}`);
+                        this.logError(`Error response: ${text}`);
                         throw new Error(`Failed to get registration options (${response.status}): ${text}`);
                     });
                 }
@@ -176,13 +266,56 @@ const webAuthn = {
             }
         )
         .then(options => {
-            this.log(`Received registration options: ${JSON.stringify(options)}`);
+            this.log(`Received registration options:`, options);
+            console.log("DEBUG - Raw registration options:", JSON.parse(JSON.stringify(options)));
             
-            // Convert base64url encoded values to ArrayBuffer as required by WebAuthn
-            options.challenge = this.base64urlToArrayBuffer(options.challenge);
+            // Debug the challenge format specifically
+            console.log("DEBUG - Challenge details:", {
+                value: options.challenge,
+                type: typeof options.challenge,
+                length: options.challenge?.length || 0
+            });
             
+            // Debug the user.id format
             if (options.user && options.user.id) {
-                options.user.id = this.base64urlToArrayBuffer(options.user.id);
+                console.log("DEBUG - User ID details:", {
+                    value: options.user.id,
+                    type: typeof options.user.id,
+                    length: options.user.id?.length || 0
+                });
+            }
+            
+            // Enhanced error handling and logging for challenge conversion
+            try {
+                // Make sure challenge is a string before conversion
+                if (typeof options.challenge !== 'string') {
+                    this.logWarn(`Challenge is not a string! Type: ${typeof options.challenge}`);
+                    options.challenge = String(options.challenge);
+                }
+                
+                this.log(`Converting challenge: ${options.challenge}`);
+                options.challenge = this.base64urlToArrayBuffer(options.challenge);
+                this.log(`Challenge converted successfully`);
+            } catch (e) {
+                this.logError(`Failed to convert challenge: ${e.message}`, e);
+                throw new Error(`Challenge conversion failed: ${e.message}`);
+            }
+            
+            // Enhanced handling for user.id
+            if (options.user && options.user.id) {
+                try {
+                    if (typeof options.user.id !== 'string') {
+                        this.logWarn(`User ID is not a string! Type: ${typeof options.user.id}`);
+                        options.user.id = String(options.user.id);
+                    }
+                    
+                    this.log('Converting user ID:', options.user.id);
+                    options.user.id = this.base64urlToArrayBuffer(options.user.id);
+                    this.log('User ID converted successfully');
+                } catch (e) {
+                    this.logError(`Failed to convert user.id: ${e.message}`, e);
+                    throw new Error(`User ID conversion failed: ${e.message}`);
+                }
             }
             
             if (options.excludeCredentials) {
@@ -191,54 +324,75 @@ const webAuthn = {
                 }
             }
             
-            // iOS-specific adjustments
-            if (isIOS) {
-                // Override any user verification and attachment settings for iOS
+            // Mac-specific adjustments
+            if (isMac) {
+                // macOS sometimes needs specific settings
+                this.log('Applying Mac-specific adjustments');
                 options.authenticatorSelection = options.authenticatorSelection || {};
+                // Let's not be too restrictive on Mac
+                options.authenticatorSelection.requireResidentKey = false;
                 options.authenticatorSelection.userVerification = 'discouraged';
-                // Don't specify authenticatorAttachment for iOS - it causes issues
-                delete options.authenticatorSelection.authenticatorAttachment;
                 
-                this.log('Adjusted options for iOS compatibility');
+                this.log('Adjusted options for Mac compatibility', options.authenticatorSelection);
             }
             
-            this.log('Converted challenge and IDs to ArrayBuffer, calling navigator.credentials.create()');
+            this.log('Converted all fields, final options:', options);
             
             // Step 2: Create credentials using WebAuthn API
+            console.log("DEBUG - Calling navigator.credentials.create with:", JSON.parse(JSON.stringify({publicKey: options})));
             return navigator.credentials.create({
                 publicKey: options
+            }).catch(err => {
+                this.logError('Credential creation failed', err);
+                console.error('ERROR DETAILS:', {
+                    name: err.name,
+                    message: err.message,
+                    code: err.code,
+                    stack: err.stack
+                });
+                throw err;
             });
         })
         .then(credential => {
             this.log('Credential created successfully, preparing data for server');
+            console.log("DEBUG - Raw credential object:", credential);
             
             // Prepare the credential data to send to server
-            const credentialId = this.arrayBufferToBase64url(credential.rawId);
-            const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
-            const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
-            
-            this.log(`Credential ID: ${credentialId.substring(0, 20)}...`);
-            
-            const registerCompleteUrl = this.getEndpointPath('register_complete');
-            this.log(`Using register complete URL: ${registerCompleteUrl}`);
-            
-            // Step 3: Send credential data to server
-            return fetch(registerCompleteUrl, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    id: credentialId,
-                    rawId: credentialId,
-                    type: credential.type,
-                    response: {
-                        clientDataJSON: clientDataJSON,
-                        attestationObject: attestationObject
-                    }
-                })
-            });
+            try {
+                const credentialId = this.arrayBufferToBase64url(credential.rawId);
+                const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
+                const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
+                
+                console.log("DEBUG - Encoded credential data:", {
+                    credentialId: credentialId,
+                    clientDataJSON: clientDataJSON?.substring(0, 50) + "...",
+                    attestationObjectPreview: attestationObject?.substring(0, 50) + "..."
+                });
+                
+                const registerCompleteUrl = this.getEndpointPath('register_complete');
+                this.log(`Using register complete URL: ${registerCompleteUrl}`);
+                
+                // Step 3: Send credential data to server
+                return fetch(registerCompleteUrl, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        id: credentialId,
+                        rawId: credentialId,
+                        type: credential.type,
+                        response: {
+                            clientDataJSON: clientDataJSON,
+                            attestationObject: attestationObject
+                        }
+                    })
+                });
+            } catch (error) {
+                this.logError("Failed to process credential for submission", error);
+                throw error;
+            }
         })
         .then(response => {
             this.log(`Response status: ${response.status}`);

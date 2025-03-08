@@ -8,6 +8,7 @@ import base64
 import datetime
 import traceback
 from functools import wraps
+import platform
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
@@ -118,8 +119,12 @@ def rate_limit(max_per_minute=60):
 
 def generate_challenge():
     """Generate a cryptographically secure random challenge"""
+    # Generate 32 bytes of random data (256 bits)
     random_bytes = secrets.token_bytes(32)
-    return bytes_to_base64url(random_bytes)
+    # Convert to URL-safe base64 encoding without padding
+    challenge = bytes_to_base64url(random_bytes)
+    print(f"DEBUG - generate_challenge: Raw length {len(random_bytes)}, Result: {challenge}")
+    return challenge
 
 def base64url_to_bytes(base64url):
     """Convert base64url to bytes"""
@@ -132,7 +137,9 @@ def base64url_to_bytes(base64url):
 def bytes_to_base64url(bytes_value):
     """Convert bytes to base64url"""
     base64_str = base64.b64encode(bytes_value).decode('ascii')
-    return base64_str.replace('+', '-').replace('/', '_').rstrip('=')
+    result = base64_str.replace('+', '-').replace('/', '_').rstrip('=')
+    print(f"DEBUG - bytes_to_base64url: Input length {len(bytes_value)}, Output: {result[:20]}...")
+    return result
 
 def normalize_credential_id(credential_id):
     """Normalize credential ID to URL-safe format without padding"""
@@ -183,14 +190,26 @@ def webauthn_register_options():
         print("\n⭐ WEBAUTHN REGISTRATION OPTIONS ⭐")
         
         # Generate a unique user ID for this registration
-        user_id = f"{secrets.token_hex(4)}-{secrets.token_urlsafe(6)}"
+        # Use bytes directly for better Base64URL encoding compatibility
+        user_id_raw = secrets.token_bytes(16)  # 16 bytes = 128 bits of randomness
+        user_id = bytes_to_base64url(user_id_raw)
         session['user_id_for_registration'] = user_id
         print(f"Register Options: Generated new user ID: {user_id}")
         
         # Generate a challenge
         challenge = generate_challenge()
+        # Remove any padding for storage in the options
+        challenge = challenge.rstrip('=')
         session['challenge'] = challenge
         print(f"Register Options: Generated challenge: {challenge}")
+        print(f"Register Options: Challenge type: {type(challenge)}, length: {len(challenge)}")
+        
+        # Ensure it's base64 decodable by JavaScript atob()
+        try:
+            test_decode = base64.b64decode(challenge.replace('-', '+').replace('_', '/') + '=' * (4 - len(challenge) % 4))
+            print(f"Register Options: Challenge can be decoded, resulting in {len(test_decode)} bytes")
+        except Exception as e:
+            print(f"Register Options: WARNING - Challenge cannot be decoded: {e}")
         
         # Get host info for proper rpId setting
         host = request.host
@@ -560,7 +579,12 @@ def debug_all():
     debug_data = {
         "timestamp": datetime.datetime.now().isoformat(),
         "session": dict(session),
-        "security_keys": []
+        "security_keys": [],
+        "environment": {
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "db_path": DB_PATH
+        }
     }
     
     try:
@@ -570,13 +594,35 @@ def debug_all():
         cursor.execute("SELECT credential_id, user_id, public_key, created_at FROM security_keys")
         keys = []
         for row in cursor.fetchall():
+            # Detailed credential info for debugging
+            credential_id = row[0]
+            user_id = row[1]
+            public_key = row[2]
+            
+            # Check if credential_id is valid base64url
+            credential_valid = True
+            try:
+                # Try to decode the credential_id to check if it's valid
+                padded = credential_id + '=' * (4 - len(credential_id) % 4) % 4
+                standard = padded.replace('-', '+').replace('_', '/') 
+                base64.b64decode(standard)
+            except Exception as e:
+                credential_valid = False
+            
             keys.append({
-                "credential_id": row[0],
-                "user_id": row[1],
-                "public_key_snippet": str(row[2])[:30] + "..." if row[2] else None,
+                "credential_id": credential_id,
+                "credential_id_length": len(credential_id),
+                "credential_valid_base64": credential_valid,
+                "user_id": user_id,
+                "public_key_snippet": str(public_key)[:30] + "..." if public_key else None,
                 "created_at": row[3]
             })
         debug_data["security_keys"] = keys
+        
+        # Add database info
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        debug_data["database_tables"] = [row[0] for row in cursor.fetchall()]
+        
         conn.close()
     except Exception as e:
         debug_data["error"] = str(e)
