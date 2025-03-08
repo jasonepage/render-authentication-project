@@ -1,3 +1,10 @@
+// FIDO2 WebAuthn JavaScript Client
+// Version: 1.0
+// Last Modified: March 2025
+
+// Force print to ensure this file is loading
+console.log("WEBAUTHN.JS LOADED - FRESH VERSION");
+
 // WebAuthn API handling for key communication
 const webAuthn = {
     // Server URL and configuration
@@ -16,12 +23,26 @@ const webAuthn = {
     isAuthenticated: false,
     userId: null,
     
+    // Force logout on page load to fix session issues
+    async forceLogout() {
+        console.log("🚨 FORCE LOGOUT - Clearing stale session");
+        try {
+            const response = await fetch(`${this.SERVER_URL}/logout`, {
+                method: 'POST',
+                credentials: 'include'
+            });
+            console.log("Force logout result:", response.ok);
+            return response.ok;
+        } catch (error) {
+            console.error("Force logout failed:", error);
+            return false;
+        }
+    },
+    
     // Debug logging
     log(step, message, data = null) {
-        console.log(`[WebAuthn] ${step}: ${message}`);
-        if (data) {
-            console.log(data);
-        }
+        const logMessage = `[WebAuthn] ${step}: ${message}`;
+        data ? console.log(logMessage, data) : console.log(logMessage);
     },
     
     // Convert base64url to ArrayBuffer
@@ -441,120 +462,64 @@ const webAuthn = {
     
     // Initialize
     init() {
-        this.log('Init', 'Initializing WebAuthn...');
+        console.log("🚀 WEBAUTHN INIT STARTING");
         
-        // Wait for DOM to be fully loaded
-        const initButtons = () => {
-            this.log('Init', 'Setting up button handlers...');
+        // Force clear any stale session
+        this.forceLogout().then(() => {
+            console.log("🔄 Session cleared, initializing UI");
             
-            // Register button
+            // Simple direct event handlers for reliability
             const registerBtn = document.getElementById('register-btn');
             if (registerBtn) {
-                this.log('Init', 'Found register button, adding click handler');
-                // Remove any existing handlers
-                registerBtn.replaceWith(registerBtn.cloneNode(true));
-                const newRegisterBtn = document.getElementById('register-btn');
-                
-                newRegisterBtn.addEventListener('click', async (e) => {
-                    this.log('Click', '🔵 Register button clicked');
+                console.log("📝 REGISTER BUTTON FOUND!");
+                registerBtn.onclick = (e) => {
+                    console.log("🔴 REGISTER BUTTON CLICKED!");
                     e.preventDefault();
-                    e.stopPropagation();
-                    
-                    // Disable button to prevent double-clicks
-                    newRegisterBtn.disabled = true;
-                    
-                    try {
-                        if (!window.PublicKeyCredential) {
-                            throw new Error('WebAuthn is not supported in this browser');
-                        }
-                        await this.registerKey();
-                    } catch (error) {
-                        console.error('[WebAuthn] Registration error:', error);
-                        alert(`Registration failed: ${error.message}\nPlease check the console for more details.`);
-                    } finally {
-                        // Re-enable button
-                        newRegisterBtn.disabled = false;
-                    }
-                });
-                
-                // Make sure button is visible and enabled
-                newRegisterBtn.classList.remove('hidden');
-                newRegisterBtn.disabled = false;
+                    this.registerKey();
+                };
             } else {
-                console.error('[WebAuthn] Register button not found in DOM');
+                console.error("❌ REGISTER BUTTON NOT FOUND IN DOM");
             }
 
-            // Login button
             const loginBtn = document.getElementById('login-btn');
             if (loginBtn) {
-                this.log('Init', 'Found login button, adding click handler');
-                // Remove any existing handlers
-                loginBtn.replaceWith(loginBtn.cloneNode(true));
-                const newLoginBtn = document.getElementById('login-btn');
-                
-                newLoginBtn.addEventListener('click', async (e) => {
-                    this.log('Click', '🔵 Login button clicked');
+                console.log("📝 LOGIN BUTTON FOUND!");
+                loginBtn.onclick = (e) => {
+                    console.log("🔴 LOGIN BUTTON CLICKED!");
                     e.preventDefault();
-                    e.stopPropagation();
-                    
-                    // Disable button to prevent double-clicks
-                    newLoginBtn.disabled = true;
-                    
-                    try {
-                        await this.loginWithKey();
-                    } catch (error) {
-                        console.error('[WebAuthn] Login error:', error);
-                        alert(`Login failed: ${error.message}\nPlease check the console for more details.`);
-                    } finally {
-                        // Re-enable button
-                        newLoginBtn.disabled = false;
-                    }
-                });
+                    this.loginWithKey();
+                };
             }
 
-            // Logout button
             const logoutBtn = document.getElementById('logout-btn');
             if (logoutBtn) {
-                this.log('Init', 'Found logout button, adding click handler');
-                // Remove any existing handlers
-                logoutBtn.replaceWith(logoutBtn.cloneNode(true));
-                const newLogoutBtn = document.getElementById('logout-btn');
-                
-                newLogoutBtn.addEventListener('click', async (e) => {
-                    this.log('Click', '🔵 Logout button clicked');
+                console.log("📝 LOGOUT BUTTON FOUND!");
+                logoutBtn.onclick = (e) => {
+                    console.log("🔴 LOGOUT BUTTON CLICKED!");
                     e.preventDefault();
-                    e.stopPropagation();
-                    
-                    // Disable button to prevent double-clicks
-                    newLogoutBtn.disabled = true;
-                    
-                    try {
-                        await this.logout();
-                        // Refresh the page after logout
-                        window.location.reload();
-                    } catch (error) {
-                        console.error('[WebAuthn] Logout error:', error);
-                        alert(`Logout failed: ${error.message}\nPlease check the console for more details.`);
-                    } finally {
-                        // Re-enable button
-                        newLogoutBtn.disabled = false;
-                    }
-                });
+                    this.logout();
+                };
             }
-        };
-
-        // Initialize immediately and also after a short delay to ensure DOM is ready
-        initButtons();
-        setTimeout(initButtons, 1000);
-        
-        // Check initial auth status
-        this.checkAuthStatus();
-        this.log('Init', 'Initialization complete');
+            
+            // Update UI immediately before checking status
+            this.isAuthenticated = false;
+            this.userId = null;
+            this.updateUI();
+            
+            // Check auth status
+            this.checkAuthStatus();
+        });
     }
 };
 
-// Initialize when the document is ready
+// Initialize when DOM is fully loaded
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('[WebAuthn] Document ready, initializing...');
+    console.log("🏁 DOM LOADED - INITIALIZING WEBAUTHN");
     webAuthn.init();
-}); 
+});
+
+// Also initialize immediately in case DOMContentLoaded already fired
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    console.log("⚡ DOM ALREADY LOADED - INITIALIZING WEBAUTHN IMMEDIATELY");
+    setTimeout(() => webAuthn.init(), 100);
+} 

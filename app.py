@@ -15,7 +15,7 @@
 # - Flask-CORS: Cross-origin resource sharing
 
 
-from flask import Flask, request, jsonify, session, send_from_directory
+from flask import Flask, request, jsonify, session, send_from_directory, make_response
 import sqlite3
 import json
 import hashlib
@@ -34,6 +34,8 @@ import sys
 import platform
 import datetime
 import traceback
+import cbor2
+import re
 
 app = Flask(__name__)
 
@@ -626,151 +628,191 @@ def bytes_to_base64url(bytes_value):
 @app.route('/register_options', methods=['POST'])
 def webauthn_register_options():
     """Generate registration options for WebAuthn"""
-    print("\n=== WEBAUTHN REGISTRATION OPTIONS REQUEST ===")
-    print("1. Generating cryptographic values...")
+    print("\n⭐⭐⭐ REGISTRATION OPTIONS REQUESTED ⭐⭐⭐")
+    print(f"Method: {request.method}")
+    print(f"Content-Type: {request.content_type}")
+    print(f"Data: {request.get_data()}")
     
-    # Generate a random user ID
-    user_id = secrets.token_bytes(16)
-    user_id_b64 = bytes_to_base64url(user_id)
-    print(f"Generated user ID: {user_id_b64}")
-    
-    # Generate a random challenge
-    challenge = generate_challenge()
-    print(f"Generated challenge: {challenge}")
-    
-    print("\n2. Setting session data...")
-    # Store in session for verification later
-    session['challenge'] = challenge
-    session['user_id'] = user_id_b64
-    print(f"Updated session: {dict(session)}")
-    
-    # Default display name based on IP or a random string
-    display_name = request.remote_addr or f"User-{secrets.token_hex(4)}"
-    print(f"Using display name: {display_name}")
-    
-    print("\n3. Creating registration options...")
-    # Create registration options
-    options = {
-        "challenge": challenge,
-        "rp": {
-            "name": "FIDO2 Chat System",
-            "id": "render-authentication-project.onrender.com"
-        },
-        "user": {
-            "id": user_id_b64,
-            "name": display_name,
-            "displayName": display_name
-        },
-        "pubKeyCredParams": [
-            {"type": "public-key", "alg": -7}  # ES256
-        ],
-        "timeout": 60000,
-        "attestation": "none"
-    }
-    print(f"Registration options created: {json.dumps(options, indent=2)}")
-    
-    return jsonify(options)
+    try:
+        data = request.get_json() or {}
+        
+        # Generate a random user ID
+        user_id = secrets.token_urlsafe(8)
+        print(f"Generated user_id: {user_id}")
+        
+        # Generate a challenge
+        challenge = generate_challenge()
+        print(f"Generated challenge: {challenge}")
+        
+        # Store the challenge in the session
+        session['challenge'] = challenge
+        print(f"Session after challenge storage: {dict(session)}")
+        
+        # Create the registration options
+        options = {
+            'challenge': challenge,
+            'rp': {
+                'name': 'Key Chat System',
+                'id': request.host
+            },
+            'user': {
+                'id': user_id,
+                'name': data.get('username', 'Anonymous'),
+                'displayName': data.get('username', 'Anonymous')
+            },
+            'pubKeyCredParams': [
+                { 'type': 'public-key', 'alg': -7 } # ES256 algorithm
+            ],
+            'timeout': 60000,
+            'attestation': 'none',
+            'authenticatorSelection': {
+                'authenticatorAttachment': 'cross-platform',
+                'requireResidentKey': False,
+                'userVerification': 'discouraged'
+            }
+        }
+        
+        print(f"Returning registration options: {options}")
+        return jsonify(options)
+    except Exception as e:
+        print(f"⛔ ERROR in registration options: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/register_complete', methods=['POST'])
 def webauthn_register_complete():
-    """Complete the registration process for WebAuthn"""
-    print("\n=== WEBAUTHN REGISTRATION COMPLETION ===")
-    print("1. Validating request data...")
+    """Complete registration for WebAuthn"""
+    print("\n⭐⭐⭐ REGISTRATION COMPLETION REQUESTED ⭐⭐⭐")
+    print(f"Method: {request.method}")
+    print(f"Content-Type: {request.content_type}")
+    print(f"Data: {request.get_data()}")
     
     try:
-        # Get the registration data from the request
-        data = request.json
-        print(f"Received registration data: {json.dumps(data, indent=2)}")
+        data = request.get_json()
+        if not data:
+            raise ValueError("No JSON data received")
         
-        print("\n2. Checking session challenge...")
-        # Verify that this is the same session that requested registration
+        print(f"Registration data received: {data}")
+        
+        # Verify the challenge
         expected_challenge = session.get('challenge')
+        print(f"Session challenge: {expected_challenge}")
+        print(f"Full session: {dict(session)}")
+        
         if not expected_challenge:
-            print("❌ No challenge found in session")
-            print(f"Current session: {dict(session)}")
-            return jsonify({"error": "Registration session expired"}), 400
+            print("⛔ ERROR: No challenge in session")
+            return jsonify({'error': 'Challenge not found in session'}), 400
         
-        print("\n3. Processing client data...")
-        # Get the client data and attestation object
-        client_data_json = base64url_to_bytes(data['response']['clientDataJSON'])
-        attestation_object = base64url_to_bytes(data['response']['attestationObject'])
+        # Decode client data
+        client_data_b64 = data.get('response', {}).get('clientDataJSON')
+        if not client_data_b64:
+            print("⛔ ERROR: No clientDataJSON in response")
+            return jsonify({'error': 'Client data not found in response'}), 400
         
-        # Parse the client data
-        client_data = json.loads(client_data_json.decode('utf-8'))
-        print(f"Parsed client data: {json.dumps(client_data, indent=2)}")
+        client_data_bytes = base64url_to_bytes(client_data_b64)
+        client_data = json.loads(client_data_bytes.decode('utf-8'))
+        print(f"Client data: {client_data}")
         
-        print("\n4. Verifying challenge...")
         # Verify challenge
         received_challenge = client_data.get('challenge')
+        if not received_challenge:
+            print("⛔ ERROR: No challenge in client data")
+            return jsonify({'error': 'Challenge not found in client data'}), 400
+        
         if received_challenge != expected_challenge:
-            print("❌ Challenge verification failed")
-            print(f"Expected: {expected_challenge}")
-            print(f"Received: {received_challenge}")
-            return jsonify({"error": "Challenge verification failed"}), 400
+            print(f"⛔ ERROR: Challenge mismatch: {received_challenge} != {expected_challenge}")
+            return jsonify({'error': 'Challenge verification failed'}), 400
         
-        print("\n5. Verifying request type...")
-        # Verify type
-        if client_data.get('type') != 'webauthn.create':
-            print(f"❌ Incorrect type: {client_data.get('type')}")
-            return jsonify({"error": "Incorrect request type"}), 400
-        
-        print("\n6. Verifying origin...")
         # Verify origin
-        origin = client_data.get('origin', '')
-        if not origin.endswith('render-authentication-project.onrender.com'):
-            print(f"❌ Origin mismatch: {origin}")
-            return jsonify({"error": "Origin verification failed"}), 400
+        origin = client_data.get('origin')
+        expected_origin = f"https://{request.host}"
+        if origin != expected_origin and origin != f"http://{request.host}":
+            print(f"⛔ ERROR: Origin mismatch: {origin} not in [{expected_origin}, http://{request.host}]")
+            return jsonify({'error': 'Origin verification failed'}), 400
         
-        print("\n7. Storing credential...")
-        # Get credential ID
-        credential_id = data['rawId']
-        print(f"Credential ID: {credential_id[:10]}...")
+        # Decode attestation object
+        attestation_b64 = data.get('response', {}).get('attestationObject')
+        if not attestation_b64:
+            print("⛔ ERROR: No attestationObject in response")
+            return jsonify({'error': 'Attestation object not found in response'}), 400
         
-        # Connect to database
-        db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
-        print(f"Using database: {db_path}")
+        attestation_bytes = base64url_to_bytes(attestation_b64)
         
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
+        # Parse CBOR data
+        try:
+            attestation = cbor2.loads(attestation_bytes)
+            print(f"Attestation format: {attestation.get('fmt', 'unknown')}")
+        except Exception as e:
+            print(f"⛔ ERROR parsing attestation object: {str(e)}")
+            return jsonify({'error': 'Failed to parse attestation object'}), 400
         
-        # Generate public key data
-        public_key = {
-            "1": 2,  # kty: EC2
-            "3": -7,  # alg: ES256
-            "-1": 1,  # curve: P-256
-            "-2": secrets.token_hex(32),
-            "-3": secrets.token_hex(32)
-        }
-        print("Generated public key data")
+        # Extract credential ID and public key
+        auth_data = attestation.get('authData')
+        if not auth_data:
+            print("⛔ ERROR: No authData in attestation")
+            return jsonify({'error': 'Auth data not found in attestation'}), 400
+        
+        # Extract flags
+        flags = auth_data[32]
+        print(f"Auth data flags: {flags}")
+        
+        # Extract AAGUID, credential ID length, credential ID, and COSE key
+        aaguid = auth_data[37:53]
+        credential_id_len = int.from_bytes(auth_data[53:55], byteorder='big')
+        credential_id = auth_data[55:55+credential_id_len]
+        cose_key = auth_data[55+credential_id_len:]
         
         try:
-            print("Inserting credential into database...")
-            c.execute("INSERT INTO security_keys (credential_id, public_key) VALUES (?, ?)",
-                  (credential_id, json.dumps(public_key)))
+            cose_key = cbor2.loads(cose_key)
+            print(f"COSE key type: {cose_key.get(1, 'unknown')}")
+        except Exception as e:
+            print(f"⛔ ERROR parsing COSE key: {str(e)}")
+            return jsonify({'error': 'Failed to parse COSE key'}), 400
+        
+        # Convert to public key
+        try:
+            x = cose_key.get(-2)
+            y = cose_key.get(-3)
+            if not x or not y:
+                print("⛔ ERROR: Missing x or y coordinates in COSE key")
+                return jsonify({'error': 'Invalid public key format'}), 400
+            
+            public_key = {'kty': 'EC', 'crv': 'P-256', 'x': x, 'y': y}
+            print(f"Public key extracted: x={len(x)} bytes, y={len(y)} bytes")
+        except Exception as e:
+            print(f"⛔ ERROR extracting public key: {str(e)}")
+            return jsonify({'error': 'Failed to extract public key'}), 400
+        
+        # Connect to the database
+        try:
+            conn = sqlite3.connect('webauthn.db')
+            cursor = conn.cursor()
+            
+            # Store the credential in the database
+            cursor.execute(
+                "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
+                (bytes_to_base64url(credential_id), data.get('id'), json.dumps(public_key), datetime.datetime.now().isoformat())
+            )
             conn.commit()
-            
-            print("\n8. Setting up session...")
-            # Set as authenticated
-            session['authenticated'] = True
-            session['user_id'] = credential_id[:10]
-            print(f"Updated session: {dict(session)}")
-            
-            print("\n✅ Registration successful!")
-            return jsonify({
-                "status": "success",
-                "message": "Registration successful",
-                "userId": credential_id[:10]
-            })
-        except sqlite3.IntegrityError:
-            print(f"❌ Credential already exists: {credential_id[:10]}...")
-            return jsonify({"error": "Credential already exists"}), 400
+            print(f"✅ Credential stored in database for user {data.get('id')}")
+        except Exception as e:
+            print(f"⛔ ERROR storing credential: {str(e)}")
+            print(traceback.format_exc())
+            return jsonify({'error': 'Failed to store credential'}), 500
         finally:
-            conn.close()
-            
+            if 'conn' in locals() and conn:
+                conn.close()
+        
+        # Set session variables
+        session['authenticated'] = True
+        session['user_id'] = user_id
+        print(f"Session after registration: {dict(session)}")
+        
+        return jsonify({'status': 'success', 'userId': user_id})
     except Exception as e:
-        print(f"❌ Registration error: {str(e)}")
-        print("Stack trace:", traceback.format_exc())
-        return jsonify({"error": f"Registration failed: {str(e)}"}), 500
+        print(f"⛔ ERROR in registration completion: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/login_options', methods=['POST'])
 def webauthn_login_options():
@@ -984,11 +1026,25 @@ def serve_css():
 
 @app.route('/webauthn.js')
 def serve_webauthn_js():
-    return send_from_directory('static', 'webauthn.js')
+    """Serve WebAuthn JavaScript file with cache busting"""
+    # Add cache busting to prevent browsers using old versions
+    response = make_response(send_from_directory('static', 'webauthn.js'))
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    # Add a random query parameter to the URL to bust cache
+    cache_buster = f"?v={int(time.time())}"
+    return response
 
 @app.route('/chat.js')
 def serve_chat_js():
-    return send_from_directory('static', 'chat.js')
+    """Serve Chat JavaScript file with cache busting"""
+    # Add cache busting to prevent browsers using old versions
+    response = make_response(send_from_directory('static', 'chat.js'))
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/debug')
 def debug_dashboard():
