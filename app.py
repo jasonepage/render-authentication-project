@@ -20,6 +20,7 @@ import datetime
 import traceback
 from functools import wraps
 import platform
+import hashlib
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
@@ -413,6 +414,53 @@ def webauthn_register_complete():
         if not data.get('response') or not data['response'].get('clientDataJSON') or not data['response'].get('attestationObject'):
             print("Register Error: Missing required attestation data")
             return jsonify({'error': 'Invalid attestation data'}), 400
+        
+        # Extract attestation data for key identification
+        attestation_object_b64 = data['response']['attestationObject']
+        
+        # Check if this physical key is already registered (by attestation)
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        try:
+            # First, check if we have an attestation_hash column
+            cursor.execute("PRAGMA table_info(security_keys)")
+            columns = [col[1] for col in cursor.fetchall()]
+            
+            # Add attestation_hash column if it doesn't exist
+            if 'attestation_hash' not in columns:
+                print("Adding attestation_hash column to security_keys table")
+                cursor.execute("ALTER TABLE security_keys ADD COLUMN attestation_hash TEXT")
+                conn.commit()
+            
+            # Generate a hash of the attestation object to identify the physical key
+            attestation_hash = hashlib.sha256(attestation_object_b64.encode()).hexdigest()
+            print(f"Generated attestation hash: {attestation_hash[:20]}...")
+            
+            # Check if this physical key is already registered
+            cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
+            existing_key = cursor.fetchone()
+            
+            if existing_key:
+                existing_user_id, existing_username = existing_key
+                print(f"Found existing registration for this physical key: User {existing_user_id}")
+                
+                # Set the user as authenticated with the existing account
+                session['authenticated'] = True
+                session['user_id'] = existing_user_id
+                session['username'] = existing_username or f"User-{existing_user_id[:8]}"
+                
+                # Return success with the existing user info
+                return jsonify({
+                    'success': True,
+                    'message': 'This security key is already registered. You have been logged in.',
+                    'existing_account': True,
+                    'user_id': existing_user_id,
+                    'username': session['username']
+                }), 200
+        except Exception as e:
+            print(f"Error checking for existing key: {e}")
+            # Continue with registration if there's an error checking
             
         # For this simplification, we'll just store the credential without complex validation
         public_key = json.dumps({
@@ -427,9 +475,6 @@ def webauthn_register_complete():
         # Store the credential in the database
         print(f"Register Complete: Using database: {DB_PATH}")
         
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
         # Normalize the credential ID to ensure consistent storage format
         normalized_credential_id = normalize_credential_id(credential_id)
         
@@ -443,16 +488,27 @@ def webauthn_register_complete():
                 cursor.execute("PRAGMA table_info(security_keys)")
                 columns = [col[1] for col in cursor.fetchall()]
                 
-                if 'username' in columns:
+                # Generate attestation hash if not already done
+                if 'attestation_hash' not in locals():
+                    attestation_hash = hashlib.sha256(attestation_object_b64.encode()).hexdigest()
+                
+                if 'username' in columns and 'attestation_hash' in columns:
+                    # Store with username and attestation hash
+                    print(f"Register Complete: Storing credential with username and attestation hash")
+                    cursor.execute(
+                        "INSERT INTO security_keys (credential_id, user_id, username, public_key, attestation_hash, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                        (normalized_credential_id, user_id, initial_username, public_key, attestation_hash)
+                    )
+                elif 'username' in columns:
                     # Store with username if the column exists
-                    print(f"Register Complete: Storing credential with username and normalized ID: {normalized_credential_id[:20]}...")
+                    print(f"Register Complete: Storing credential with username")
                     cursor.execute(
                         "INSERT INTO security_keys (credential_id, user_id, username, public_key, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
                         (normalized_credential_id, user_id, initial_username, public_key)
                     )
                 else:
                     # Store without username if the column doesn't exist
-                    print(f"Register Complete: Storing credential without username: {normalized_credential_id[:20]}...")
+                    print(f"Register Complete: Storing credential without username")
                     cursor.execute(
                         "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
                         (normalized_credential_id, user_id, public_key)
@@ -468,24 +524,22 @@ def webauthn_register_complete():
                 except sqlite3.Error as insert_error:
                     print(f"Register Complete Critical Error: Could not insert credential: {insert_error}")
                     conn.rollback()
-        
+                    conn.close()
+                    return jsonify({'error': 'Database error during registration'}), 500
+
         conn.commit()
         conn.close()
         
-        # Set authenticated session and clean up registration data
+        # Set the user as authenticated
         session['authenticated'] = True
         session['user_id'] = user_id
-        # Clear the registration-specific data to prevent reuse
-        session.pop('user_id_for_registration', None)
-        print(f"Register Complete: Session updated")
+        session['username'] = initial_username
         
-        return jsonify({
-            'status': 'success',
-            'userId': user_id
-        })
+        print(f"Register Complete: User {user_id} successfully registered and authenticated")
+        return jsonify({'success': True, 'user_id': user_id, 'username': initial_username}), 200
         
     except Exception as e:
-        print(f"Register Error: {str(e)}")
+        print(f"Register Complete Error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
@@ -586,24 +640,45 @@ def webauthn_login_complete():
         
         # Try both normalized and original credential ID for maximum compatibility
         cursor.execute(
-            "SELECT user_id, public_key, credential_id, username FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
+            "SELECT user_id, public_key, credential_id, username, attestation_hash FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
             (normalized_credential_id, credential_id)
         )
         
         result = cursor.fetchone()
-        conn.close()
         
         if not result:
             print(f"Login Error: Credential ID not found: {credential_id[:20]}...")
             return jsonify({'error': 'Credential not recognized. Please register first.'}), 401
             
-        user_id, public_key_json, stored_credential_id, username = result
+        user_id, public_key_json, stored_credential_id, username, attestation_hash = result if len(result) >= 5 else result + (None,)
         
         if not user_id:
             print(f"Login Error: Invalid user ID for credential")
             return jsonify({'error': 'Invalid user credential. Please register again.'}), 401
             
         print(f"Login Complete: Found user ID: {user_id} with username: {username or 'Unknown'}")
+        
+        # If we have authenticator data but no attestation hash, try to update it
+        if not attestation_hash and data['response'].get('authenticatorData'):
+            try:
+                # Check if attestation_hash column exists
+                cursor.execute("PRAGMA table_info(security_keys)")
+                columns = [col[1] for col in cursor.fetchall()]
+                
+                if 'attestation_hash' in columns:
+                    # Generate a hash from the authenticator data
+                    auth_data_hash = hashlib.sha256(data['response']['authenticatorData'].encode()).hexdigest()
+                    print(f"Updating attestation hash for existing credential: {auth_data_hash[:20]}...")
+                    
+                    # Update the record with the hash
+                    cursor.execute(
+                        "UPDATE security_keys SET attestation_hash = ? WHERE credential_id = ?",
+                        (auth_data_hash, stored_credential_id)
+                    )
+                    conn.commit()
+            except Exception as e:
+                print(f"Warning: Could not update attestation hash: {e}")
+                # Continue with login regardless
         
         # For this simplification, we'll just verify that we found a user
         # In a real implementation, you would verify the signature against the stored public key
@@ -615,6 +690,8 @@ def webauthn_login_complete():
         session['username'] = username or f"User-{user_id[:8]}"
         
         print(f"Login Complete: User {user_id} successfully authenticated as {session['username']}")
+        conn.close()
+        
         return jsonify({
             'success': True, 
             'user_id': user_id,
@@ -765,31 +842,31 @@ def debug_all():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Check if username column exists
+        # Check if attestation_hash column exists
         cursor.execute("PRAGMA table_info(security_keys)")
         columns = [col[1] for col in cursor.fetchall()]
-        has_username_column = 'username' in columns
+        has_attestation_hash = 'attestation_hash' in columns
         
-        # Adjust query based on whether username column exists
-        if has_username_column:
-            cursor.execute("SELECT credential_id, user_id, username, public_key, created_at FROM security_keys")
+        # Adjust query based on schema
+        if has_attestation_hash:
+            cursor.execute("SELECT credential_id, user_id, username, public_key, attestation_hash, created_at FROM security_keys")
         else:
-            cursor.execute("SELECT credential_id, user_id, public_key, created_at FROM security_keys")
+            cursor.execute("SELECT credential_id, user_id, username, public_key, created_at FROM security_keys")
         
         keys = []
         for row in cursor.fetchall():
             # Detailed credential info for debugging
             credential_id = row[0]
             user_id = row[1]
+            username = row[2]
+            public_key = row[3]
             
-            if has_username_column:
-                username = row[2]
-                public_key = row[3]
-                created_at = row[4]
+            if has_attestation_hash:
+                attestation_hash = row[4]
+                created_at = row[5]
             else:
-                username = f"User-{user_id[:8]}"  # Generate username from user_id
-                public_key = row[2]
-                created_at = row[3]
+                attestation_hash = None
+                created_at = row[4]
             
             # Check if credential_id is valid base64url
             credential_valid = True
@@ -807,6 +884,7 @@ def debug_all():
                 "credential_valid_base64": credential_valid,
                 "user_id": user_id,
                 "username": username,
+                "attestation_hash": attestation_hash[:20] + "..." if attestation_hash else None,
                 "public_key_snippet": str(public_key)[:30] + "..." if public_key else None,
                 "created_at": created_at
             })
@@ -815,6 +893,10 @@ def debug_all():
         # Add database info
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         debug_data["database_tables"] = [row[0] for row in cursor.fetchall()]
+        
+        # Add schema info for security_keys table
+        cursor.execute("PRAGMA table_info(security_keys)")
+        debug_data["security_keys_schema"] = [{"name": row[1], "type": row[2]} for row in cursor.fetchall()]
         
         conn.close()
     except Exception as e:

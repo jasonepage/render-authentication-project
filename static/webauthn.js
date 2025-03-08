@@ -319,10 +319,24 @@ const webAuthn = {
         .then(result => {
             if (!result) return;
             
-            this.log('Registration successful:', result);
-            alert('Registration successful! You are now logged in.');
+            this.log('Registration result:', result);
             
-            // Check authentication status after registration
+            // Check if this was an existing account
+            if (result.existing_account) {
+                alert('This security key is already registered with an existing account. You have been logged in to that account.');
+            } else {
+                alert('Registration successful! You are now logged in.');
+            }
+            
+            // Update state
+            this.isAuthenticated = true;
+            this.userId = result.user_id;
+            this.username = result.username;
+            
+            // Update UI
+            this.updateUI(true, result.user_id, result.username);
+            
+            // Reload the page after a short delay
             setTimeout(() => {
                 window.location.reload();
             }, 1000);
@@ -498,7 +512,7 @@ const webAuthn = {
     },
 
     // Update UI based on authentication status
-    updateUI: function(isAuthenticated, userId) {
+    updateUI: function(isAuthenticated, userId, username) {
         this.log('Updating UI for authentication state:', isAuthenticated);
         
         const authSection = document.getElementById('auth-status');
@@ -739,11 +753,13 @@ const webAuthn = {
             // Store the user ID for later use
             if (status.authenticated && status.userId) {
                 this.currentUserId = status.userId;
+                this.currentUsername = status.username;
             } else {
                 this.currentUserId = null;
+                this.currentUsername = null;
             }
             // Update the UI with the authentication status and user ID
-            this.updateUI(status.authenticated, status.userId);
+            this.updateUI(status.authenticated, status.userId, status.username);
             return status;
         })
         .catch(error => {

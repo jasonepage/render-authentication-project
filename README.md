@@ -1,7 +1,5 @@
 # FIDO2 Chat System
 
-A secure chat application that implements FIDO2/WebAuthn authentication for passwordless login using security keys, biometrics, or platform authenticators.
-
 ## Features
 
 - **Passwordless Authentication**: Users authenticate using FIDO2/WebAuthn compliant devices (security keys, TouchID, Windows Hello, etc.)
