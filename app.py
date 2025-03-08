@@ -497,11 +497,19 @@ def webauthn_register_complete():
                 cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
                 existing_key = cursor.fetchone()
             
-            # Method 3: If not found and we have an AAGUID, check by AAGUID
-            # This is the key for cross-device recognition of the same physical key
-            if not existing_key and aaguid:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
+            # Method 3: If not found, check by attestation hash (most reliable for cross-device)
+            # This is more reliable than AAGUID which might be generic
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
                 existing_key = cursor.fetchone()
+                
+            # Method 4: If not found, check by combined hash
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ?", (combined_hash,))
+                existing_key = cursor.fetchone()
+            
+            # AAGUID matching is disabled because it's too generic
+            # We found that "a363666d74646e6f6e65676174745374" appears in multiple different keys
             
             if existing_key:
                 existing_user_id, existing_username = existing_key
@@ -646,17 +654,8 @@ def webauthn_login_options():
         cursor = conn.cursor()
         
         # Get all credentials
-        cursor.execute("SELECT credential_id, user_id, aaguid FROM security_keys")
+        cursor.execute("SELECT credential_id, user_id FROM security_keys")
         rows = cursor.fetchall()
-        
-        # Group credentials by AAGUID to find all credentials for the same physical key
-        aaguid_map = {}
-        for row in rows:
-            credential_id, user_id, aaguid = row
-            if aaguid:
-                if aaguid not in aaguid_map:
-                    aaguid_map[aaguid] = []
-                aaguid_map[aaguid].append((credential_id, user_id))
         
         credentials = []
         for row in rows:
