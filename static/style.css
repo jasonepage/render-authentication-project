@@ -1,3 +1,19 @@
+/**
+ * FIDO2 Chat System - Styles
+ * 
+ * Stylesheet for the FIDO2 Chat Application
+ * Includes styles for:
+ * - Layout and containers
+ * - Authentication UI
+ * - Chat interface
+ * - Message formatting
+ * - Responsive design
+ * 
+ * Author: [Your Name]
+ * Date: [Current Date]
+ * Version: 1.0
+ */
+
 /* Main styles for FIDO2 Chat System */
 * {
     margin: 0;

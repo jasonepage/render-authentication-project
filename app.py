@@ -1,3 +1,14 @@
+"""
+Author(s): Chris Becker, Jake McDowell, Jason Page
+Version: 1.0
+
+Features:
+- WebAuthn/FIDO2 passwordless authentication
+- Secure chat with authentication
+- Username customization
+- Admin debugging tools
+"""
+
 from flask import Flask, jsonify, request, session, send_from_directory
 import os
 import json
@@ -845,10 +856,10 @@ def serve_static(path):
     """Serve static files"""
     return send_from_directory('static', path)
 
-@app.route('/styles.css')
+@app.route('/style.css')
 def serve_css():
     """Serve CSS file"""
-    return send_from_directory('static', 'styles.css')
+    return send_from_directory('static', 'style.css')
 
 @app.route('/webauthn.js')
 def serve_webauthn_js():

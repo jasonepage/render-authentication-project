@@ -1,3 +1,17 @@
+/**
+ * FIDO2 Chat System - Chat Module
+ * 
+ * Handles client-side chat functionality including:
+ * - Message loading and display
+ * - Message sending
+ * - Polling for new messages
+ * - Username display
+ * 
+ * Author: [Your Name]
+ * Date: [Current Date]
+ * Version: 1.0
+ */
+
 // Chat functionality
 const chat = {
     // Server URL (same as in webauthn.js)

@@ -622,7 +622,7 @@ const webAuthn = {
             authSection.innerHTML = `
                 <p>You are not authenticated.</p>
                 <div class="auth-buttons">
-                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register Security Key</button>
+                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register</button>
                     <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login</button>
                 </div>
             `;
