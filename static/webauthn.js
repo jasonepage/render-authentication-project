@@ -409,7 +409,7 @@ const webAuthn = {
             this.hideModal();
             
             // Update the UI to reflect the authenticated state
-            this.updateUI(true);
+            this.updateUI(true, result.userId);
             
             // Alert the user
             alert('Security key registered successfully!');
@@ -540,7 +540,7 @@ const webAuthn = {
             this.hideModal();
             
             // Update the UI to reflect the authenticated state
-            this.updateUI(true);
+            this.updateUI(true, result.userId);
             
             // Alert the user
             alert('Login successful!');
@@ -591,201 +591,188 @@ const webAuthn = {
         return false; // Prevent form submission
     },
 
-    // Update UI based on authentication state - with compatibility for different HTML templates
-    updateUI: function(isAuthenticated) {
-        this.log(`Updating UI, authenticated: ${isAuthenticated}`);
+    // Update UI based on authentication status
+    updateUI: function(isAuthenticated, userId) {
+        this.log('Updating UI for authentication state:', isAuthenticated);
         
-        // Look for any possible auth status element (handle both templates)
-        let authDiv = document.getElementById('auth-status');
-        
-        // If auth-status not found, try the old element structure
-        if (!authDiv) {
-            const statusMessage = document.getElementById('status-message');
-            if (statusMessage) {
-                this.log('Found status-message element instead of auth-status, using legacy UI update');
-                statusMessage.textContent = isAuthenticated ? 'You are authenticated!' : 'Not authenticated';
-                
-                // Handle button visibility in the old template
-                const registerBtn = document.getElementById('register-button');
-                const loginBtn = document.getElementById('login-button');
-                const logoutBtn = document.getElementById('logout-button');
-                
-                if (registerBtn && loginBtn && logoutBtn) {
-                    if (isAuthenticated) {
-                        registerBtn.classList.add('hidden');
-                        loginBtn.classList.add('hidden');
-                        logoutBtn.classList.remove('hidden');
-                    } else {
-                        registerBtn.classList.remove('hidden');
-                        loginBtn.classList.remove('hidden');
-                        logoutBtn.classList.add('hidden');
-                    }
-                }
-                
-                // Chat elements in old template
-                const messageInput = document.getElementById('message-input');
-                const sendButton = document.getElementById('send-button');
-                const messages = document.getElementById('messages');
-                
-                if (messageInput && sendButton) {
-                    messageInput.disabled = !isAuthenticated;
-                    sendButton.disabled = !isAuthenticated;
-                }
-                
-                if (messages) {
-                    // Clear loading message if authenticated
-                    if (isAuthenticated) {
-                        const loadingMsg = messages.querySelector('.message-loading');
-                        if (loadingMsg) loadingMsg.style.display = 'none';
-                    }
-                }
-                
-                return; // Exit early as we've handled the old template
-            }
-            
-            // If we can't find either element structure, log an error and exit
-            this.log('ERROR: No authentication status elements found in DOM');
-            return;
-        }
-        
-        // If we get here, we found the auth-status element - standard template
-        const chatForm = document.getElementById('chat-form');
+        const authSection = document.getElementById('auth-status');
         const messageList = document.getElementById('message-list');
+        const chatForm = document.getElementById('chat-form');
         
         if (isAuthenticated) {
-            // User is authenticated, show logout button and chat
-            authDiv.innerHTML = `
+            // Display user is authenticated along with their ID
+            const displayUserId = userId ? userId.substring(0, 8) + '...' : 'Unknown';
+            authSection.innerHTML = `
                 <p>You are authenticated!</p>
-                <button onclick="webAuthn.logout(); return false;">Logout</button>
+                <p class="user-id-display">Your User ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></p>
+                <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
             `;
             
-            if (chatForm) chatForm.style.display = 'block';
-            if (messageList) messageList.style.display = 'block';
+            // Show the message interface
+            messageList.style.display = 'block';
+            chatForm.style.display = 'flex';
             
-            // Start fetching messages
+            // Load messages
+            this.loadMessages();
+            
+            // Start polling for messages
             this.startMessagePolling();
         } else {
-            // User is not authenticated, show register and login buttons
-            authDiv.innerHTML = `
+            // Display unauthenticated state with registration and login buttons
+            authSection.innerHTML = `
                 <p>You are not authenticated.</p>
-                <button onclick="webAuthn.registerKey(); return false;">Register Security Key</button>
-                <button onclick="webAuthn.loginWithKey(); return false;">Login</button>
+                <div class="auth-buttons">
+                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register Security Key</button>
+                    <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login</button>
+                </div>
             `;
             
-            if (chatForm) chatForm.style.display = 'none';
-            if (messageList) messageList.style.display = 'none';
+            // Hide the message interface
+            messageList.style.display = 'none';
+            chatForm.style.display = 'none';
             
-            // Stop message polling
+            // Stop polling for messages
             this.stopMessagePolling();
         }
     },
 
-    // Start message polling
-    startMessagePolling: function() {
-        this.log('Starting message polling');
+    // Load messages from the server
+    loadMessages: function() {
+        this.log('Loading messages...');
         
-        if (!this.messageInterval) {
-            this.messageInterval = setInterval(() => {
-                this.fetchMessages();
-            }, 2000); // Poll every 2 seconds
-        }
-    },
-
-    // Stop message polling
-    stopMessagePolling: function() {
-        this.log('Stopping message polling');
+        const getMessagesUrl = this.getEndpointPath('get_messages');
         
-        if (this.messageInterval) {
-            clearInterval(this.messageInterval);
-            this.messageInterval = null;
-        }
-    },
-    
-    // Fetch chat messages
-    fetchMessages: function() {
-        const messagesUrl = this.getEndpointPath('get_messages');
-        
-        fetch(messagesUrl, {
+        return fetch(getMessagesUrl, {
             method: 'GET',
             credentials: 'include'
         })
         .then(response => {
             if (!response.ok) {
                 return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
-                    throw new Error(`Failed to fetch messages (${response.status}): ${text}`);
+                    throw new Error(`Failed to load messages (${response.status}): ${text}`);
                 });
             }
             return response.json();
         })
-        .then(data => {
-            // Extract messages array from the response
-            const messages = data.messages || [];
-            this.log(`Retrieved ${messages.length} messages from server`);
-            
-            // Handle both message container types
-            let messageContainer = document.getElementById('message-list');
-            if (!messageContainer) {
-                messageContainer = document.getElementById('messages');
-            }
-            
-            if (!messageContainer) {
-                this.log('WARNING: No message container found in DOM');
-                return;
-            }
-            
-            // Clear existing messages
-            messageContainer.innerHTML = '';
-            
-            if (messages.length === 0) {
-                // Add a placeholder message if no messages
-                const placeholder = document.createElement('div');
-                placeholder.className = messageContainer.id === 'messages' ? 'message' : 'message-item';
-                placeholder.innerHTML = '<strong>System</strong>: No messages yet. Start chatting!';
-                messageContainer.appendChild(placeholder);
-                return;
-            }
-            
-            // Add each message
-            messages.forEach(msg => {
-                const messageElem = document.createElement('div');
-                messageElem.className = messageContainer.id === 'messages' ? 'message' : 'message-item';
-                messageElem.innerHTML = `
-                    <strong>${msg.user || 'Anonymous'}</strong>: ${msg.message} 
-                    <span class="${messageContainer.id === 'messages' ? 'time' : 'timestamp'}">${msg.time || ''}</span>
-                `;
-                messageContainer.appendChild(messageElem);
-            });
-            
-            // Scroll to bottom
-            messageContainer.scrollTop = messageContainer.scrollHeight;
+        .then(messages => {
+            this.log(`Loaded ${messages.length} messages`);
+            this.displayMessages(messages);
+            return messages;
         })
         .catch(error => {
-            this.log(`Message fetch error: ${error.message}`);
+            this.logError('Error loading messages:', error);
+            return [];
         });
     },
     
-    // Send a chat message with compatibility for both UI styles
+    // Display messages in the UI
+    displayMessages: function(messages) {
+        const messageList = document.getElementById('message-list');
+        if (!messageList) {
+            this.logError('Message list element not found');
+            return;
+        }
+        
+        // Clear current messages
+        messageList.innerHTML = '';
+        
+        if (messages.length === 0) {
+            // Show placeholder message
+            const placeholder = document.createElement('div');
+            placeholder.className = 'message-item system-message';
+            placeholder.innerHTML = '<strong>System</strong>: No messages yet. Start chatting!';
+            messageList.appendChild(placeholder);
+            return;
+        }
+        
+        // Add each message
+        messages.forEach(message => {
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message-item';
+            
+            // Check if this is the current user's message
+            const isCurrentUser = this.currentUserId && message.user === this.currentUserId;
+            if (isCurrentUser) {
+                messageElement.classList.add('own-message');
+            }
+            
+            // Format the user ID for display (either "You" or first 8 chars)
+            let displayUser = isCurrentUser ? 'You' : message.user.substring(0, 8) + '...';
+            
+            // Create message content
+            messageElement.innerHTML = `
+                <span class="message-user">${displayUser}</span>
+                <span class="message-text">${this.escapeHtml(message.message)}</span>
+                <span class="message-time">${this.formatTime(message.time)}</span>
+            `;
+            
+            messageList.appendChild(messageElement);
+        });
+        
+        // Scroll to bottom
+        messageList.scrollTop = messageList.scrollHeight;
+    },
+    
+    // Helper to format time
+    formatTime: function(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
+    
+    // Helper to escape HTML
+    escapeHtml: function(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    },
+    
+    // Message polling variables
+    messagePollingInterval: null,
+    
+    // Start polling for messages
+    startMessagePolling: function() {
+        this.log('Starting message polling');
+        
+        // Clear any existing polling
+        this.stopMessagePolling();
+        
+        // Load messages immediately
+        this.loadMessages();
+        
+        // Set up polling every 5 seconds
+        this.messagePollingInterval = setInterval(() => {
+            this.loadMessages();
+        }, 5000);
+    },
+    
+    // Stop polling for messages
+    stopMessagePolling: function() {
+        if (this.messagePollingInterval) {
+            this.log('Stopping message polling');
+            clearInterval(this.messagePollingInterval);
+            this.messagePollingInterval = null;
+        }
+    },
+    
+    // Send a message
     sendMessage: function(event) {
         if (event) {
             event.preventDefault();
         }
         
-        // Check for message input in either UI style
-        let messageInput = document.getElementById('message-input');
-        if (!messageInput) {
-            this.log('ERROR: message input element not found');
-            return false;
-        }
-        
+        const messageInput = document.getElementById('message-input');
         const message = messageInput.value.trim();
+        
         if (!message) {
-            return false;
+            return;
         }
         
-        this.log(`Sending message: ${message}`);
+        this.log('Sending message:', message);
         
         const sendMessageUrl = this.getEndpointPath('send_message');
+        
+        // Show sending state
+        messageInput.disabled = true;
         
         fetch(sendMessageUrl, {
             method: 'POST',
@@ -798,54 +785,55 @@ const webAuthn = {
         .then(response => {
             if (!response.ok) {
                 return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
                     throw new Error(`Failed to send message (${response.status}): ${text}`);
                 });
             }
             return response.json();
         })
         .then(result => {
-            this.log('Message sent successfully');
+            this.log('Message sent successfully:', result);
             messageInput.value = '';
-            this.fetchMessages(); // Update messages immediately
+            
+            // Immediately load messages to show the new message
+            this.loadMessages();
         })
         .catch(error => {
-            this.log(`Send message error: ${error.message}`);
+            this.logError('Error sending message:', error);
             alert(`Failed to send message: ${error.message}`);
+        })
+        .finally(() => {
+            messageInput.disabled = false;
+            messageInput.focus();
         });
-        
-        return false;
     },
     
-    // Check authentication status
+    // Check auth status and update UI accordingly
     checkAuthStatus: function() {
-        this.log('Checking authentication status');
+        this.log('Checking authentication status...');
         
         const authStatusUrl = this.getEndpointPath('auth_status');
-        this.log(`Using auth status URL: ${authStatusUrl}`);
         
-        fetch(authStatusUrl, {
+        return fetch(authStatusUrl, {
             method: 'GET',
             credentials: 'include'
         })
-        .then(response => {
-            this.log(`Response status: ${response.status}`);
-            if (!response.ok) {
-                return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
-                    throw new Error(`Failed to check auth status (${response.status}): ${text}`);
-                });
+        .then(response => response.json())
+        .then(status => {
+            this.log('Auth status received:', status);
+            // Store the user ID for later use
+            if (status.authenticated && status.userId) {
+                this.currentUserId = status.userId;
+            } else {
+                this.currentUserId = null;
             }
-            return response.json();
-        })
-        .then(result => {
-            this.log(`Auth status: ${JSON.stringify(result)}`);
-            this.updateUI(result.authenticated);
+            // Update the UI with the authentication status and user ID
+            this.updateUI(status.authenticated, status.userId);
+            return status;
         })
         .catch(error => {
-            this.log(`Auth status error: ${error.message}`);
-            console.error('Failed to check authentication status:', error);
-            this.updateUI(false); // Assume not authenticated on error
+            this.logError('Error checking auth status:', error);
+            this.updateUI(false);
+            return { authenticated: false };
         });
     },
     
@@ -913,6 +901,49 @@ const webAuthn = {
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    webAuthn.log('DOM content loaded, initializing WebAuthn client');
-    webAuthn.init();
+    const chatForm = document.getElementById('chat-form');
+    if (chatForm) {
+        chatForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            webAuthn.sendMessage();
+        });
+    }
+    
+    // Add custom CSS styles for user ID display
+    const style = document.createElement('style');
+    style.textContent = `
+        .user-id-display {
+            font-size: 0.9em;
+            margin: 5px 0;
+            color: #666;
+        }
+        .user-id-value {
+            font-weight: bold;
+            color: #4CAF50;
+            cursor: help;
+        }
+        .auth-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .button {
+            padding: 8px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .logout-button {
+            background-color: #f44336;
+        }
+        .button:hover {
+            opacity: 0.9;
+        }
+    `;
+    document.head.appendChild(style);
+    
+    // Initialize
+    webAuthn.checkAuthStatus();
 });
