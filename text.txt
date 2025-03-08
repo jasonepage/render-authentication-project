@@ -1,0 +1,3 @@
+curl -X POST https://your-app-url/cleanup_duplicate_credentials \
+  -H "Content-Type: application/json" \
+  -d '{"secret":"admin_secret"}'

@@ -288,6 +288,15 @@ def bytes_to_base64url(bytes_value):
     base64_str = base64.b64encode(bytes_value).decode('utf-8')
     return base64_str.replace('+', '-').replace('/', '_').rstrip('=')
 
+# Add a new helper function before the route definitions
+def normalize_credential_id(credential_id):
+    """Normalize credential ID to URL-safe format without padding"""
+    # First convert to standard base64 format (with + and /)
+    standard_format = credential_id.replace('-', '+').replace('_', '/')
+    # Then convert to URL-safe format (with - and _)
+    urlsafe_format = standard_format.replace('+', '-').replace('/', '_').replace('=', '')
+    return urlsafe_format
+
 # ==========================================
 # WebAuthn API Endpoints
 # ==========================================
@@ -421,24 +430,19 @@ def webauthn_register_complete():
         existing_credentials = cursor.fetchall()
         print(f"Register Complete: User has {len(existing_credentials)} existing credentials")
         
-        # Store both formats of the credential ID to improve cross-device compatibility
-        # iOS often changes the formatting between registration and login
-        standard_format = credential_id.replace('-', '+').replace('_', '/').rstrip('=')
-        urlsafe_format = credential_id.replace('+', '-').replace('/', '_').replace('=', '')
+        # Normalize the credential ID to ensure consistent storage format
+        normalized_credential_id = normalize_credential_id(credential_id)
         
-        # Store the credential with the default format first
-        print(f"Register Complete: Storing credential with ID: {credential_id[:20]}...")
-        cursor.execute(
-            "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
-            (credential_id, user_id, public_key)
-        )
-        
-        # Also store the alternate format as a separate record for iOS compatibility
-        if credential_id != standard_format:
-            print(f"Register Complete: Also storing standard format: {standard_format[:20]}...")
+        # Check if this exact credential ID already exists
+        cursor.execute("SELECT credential_id FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
+        if cursor.fetchone():
+            print(f"Register Complete: Credential ID already exists, skipping insertion")
+        else:
+            # Store only the normalized version
+            print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
             cursor.execute(
                 "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
-                (standard_format, user_id, public_key)
+                (normalized_credential_id, user_id, public_key)
             )
         
         conn.commit()
@@ -593,28 +597,39 @@ def webauthn_login_complete():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Try multiple formats for the credential ID (iOS often changes formatting)
-        formats_to_try = [
-            credential_id,                                          # Original
-            credential_id.replace('-', '+').replace('_', '/'),      # URL safe to standard
-            credential_id.replace('+', '-').replace('/', '_'),      # Standard to URL safe
-            credential_id.replace('-', '+').replace('_', '/').rstrip('='),   # URL safe to standard without padding
-            credential_id.replace('+', '-').replace('/', '_').replace('=', '')   # Standard to URL safe without padding
-        ]
+        # Try the normalized credential ID format
+        normalized_credential_id = normalize_credential_id(credential_id)
+        print(f"Login Complete: Using normalized credential ID: {normalized_credential_id[:20]}...")
         
-        user_id = None
-        public_key = None
-        matching_credential_id = None
-        for format_id in formats_to_try:
-            print(f"Login Complete: Trying format: {format_id[:20]}...")
-            cursor.execute("SELECT user_id, public_key, credential_id FROM security_keys WHERE credential_id = ?", (format_id,))
-            row = cursor.fetchone()
-            if row:
-                user_id = row[0]
-                public_key = row[1]
-                matching_credential_id = row[2]
-                print(f"Login Complete: Found user {user_id} with credential {matching_credential_id[:20]}...")
-                break
+        cursor.execute("SELECT user_id, public_key, credential_id FROM security_keys WHERE credential_id = ?", 
+                      (normalized_credential_id,))
+        row = cursor.fetchone()
+        
+        # If not found with normalized format, try legacy formats for backwards compatibility
+        if not row:
+            formats_to_try = [
+                credential_id,                                          # Original
+                credential_id.replace('-', '+').replace('_', '/'),      # URL safe to standard
+                credential_id.replace('+', '-').replace('/', '_'),      # Standard to URL safe
+                credential_id.replace('-', '+').replace('_', '/').rstrip('='),   # URL safe to standard without padding
+                credential_id.replace('+', '-').replace('/', '_').replace('=', '')   # Standard to URL safe without padding
+            ]
+            
+            for format_id in formats_to_try:
+                print(f"Login Complete: Trying legacy format: {format_id[:20]}...")
+                cursor.execute("SELECT user_id, public_key, credential_id FROM security_keys WHERE credential_id = ?", (format_id,))
+                row = cursor.fetchone()
+                if row:
+                    user_id = row[0]
+                    public_key = row[1]
+                    matching_credential_id = row[2]
+                    print(f"Login Complete: Found user {user_id} with legacy credential {matching_credential_id[:20]}...")
+                    break
+        else:
+            user_id = row[0]
+            public_key = row[1]
+            matching_credential_id = row[2]
+            print(f"Login Complete: Found user {user_id} with normalized credential {matching_credential_id[:20]}...")
         
         conn.close()
         
@@ -794,6 +809,64 @@ def send_message():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+@app.route('/cleanup_duplicate_credentials', methods=['POST'])
+def cleanup_duplicate_credentials():
+    """Admin function to clean up duplicate credential IDs"""
+    try:
+        print("\n⭐ CLEANING UP DUPLICATE CREDENTIALS ⭐")
+        
+        # For security, require a secret token
+        data = request.get_json()
+        if not data or data.get('secret') != os.environ.get('ADMIN_SECRET', 'admin_secret'):
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        db_path = '/opt/render/webauthn.db'
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get all credentials
+        cursor.execute("SELECT credential_id, user_id, public_key, created_at FROM security_keys")
+        credentials = cursor.fetchall()
+        
+        # Track normalized credentials to find duplicates
+        normalized_map = {}
+        duplicate_count = 0
+        
+        for cred_id, user_id, public_key, created_at in credentials:
+            normalized_id = normalize_credential_id(cred_id)
+            
+            if normalized_id in normalized_map:
+                # This is a duplicate
+                duplicate_count += 1
+                # Delete this credential if it's not the same as the normalized version
+                if cred_id != normalized_id:
+                    print(f"Deleting duplicate credential: {cred_id[:20]}...")
+                    cursor.execute("DELETE FROM security_keys WHERE credential_id = ?", (cred_id,))
+            else:
+                # First time seeing this normalized ID
+                normalized_map[normalized_id] = True
+                
+                # If the credential isn't already in normalized form, update it
+                if cred_id != normalized_id:
+                    print(f"Updating credential from {cred_id[:20]}... to normalized form {normalized_id[:20]}...")
+                    cursor.execute(
+                        "UPDATE security_keys SET credential_id = ? WHERE credential_id = ?", 
+                        (normalized_id, cred_id)
+                    )
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Cleaned up {duplicate_count} duplicate credentials"
+        })
+        
+    except Exception as e:
+        print(f"Cleanup Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     import os
