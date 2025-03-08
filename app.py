@@ -445,6 +445,12 @@ def webauthn_register_complete():
                 print("Adding raw_id column to security_keys table")
                 cursor.execute("ALTER TABLE security_keys ADD COLUMN raw_id TEXT")
                 conn.commit()
+                
+            # Add combined_hash column if it doesn't exist
+            if 'combined_hash' not in columns:
+                print("Adding combined_hash column to security_keys table")
+                cursor.execute("ALTER TABLE security_keys ADD COLUMN combined_hash TEXT")
+                conn.commit()
             
             # Generate multiple identifiers for the physical key
             # 1. Primary attestation hash (from attestation object)
@@ -478,31 +484,23 @@ def webauthn_register_complete():
             except Exception as e:
                 print(f"Error extracting AAGUID: {e}")
             
-            # Check for existing registrations using multiple methods
+            # IMPORTANT: Only check for existing registrations by exact credential ID match
+            # This ensures each physical key gets its own account
             existing_key = None
             
-            # Method 1: Check by attestation hash
-            cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
+            # Method 1: Check by exact credential ID match
+            cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
             existing_key = cursor.fetchone()
             
-            # Method 2: If not found, check by combined hash
+            # Method 2: If not found, check by normalized credential ID
             if not existing_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (combined_hash,))
-                existing_key = cursor.fetchone()
-            
-            # Method 3: If not found and we have an AAGUID, check by AAGUID
-            if not existing_key and aaguid:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
-                existing_key = cursor.fetchone()
-            
-            # Method 4: Last resort - check by raw ID
-            if not existing_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE raw_id = ?", (raw_id,))
+                normalized_credential_id = normalize_credential_id(credential_id)
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
                 existing_key = cursor.fetchone()
             
             if existing_key:
                 existing_user_id, existing_username = existing_key
-                print(f"Found existing registration for this physical key: User {existing_user_id}")
+                print(f"Found existing registration for this credential ID: User {existing_user_id}")
                 
                 # Set the user as authenticated with the existing account
                 session['authenticated'] = True
@@ -517,6 +515,14 @@ def webauthn_register_complete():
                     'user_id': existing_user_id,
                     'username': session['username']
                 }), 200
+                
+            # Log the identification data for debugging
+            print(f"Key identification data:")
+            print(f"  - Credential ID: {credential_id[:20]}...")
+            print(f"  - Attestation hash: {attestation_hash[:20]}...")
+            print(f"  - AAGUID: {aaguid}")
+            print(f"  - Raw ID: {raw_id[:20]}...")
+            
         except Exception as e:
             print(f"Error checking for existing key: {e}")
             print(traceback.format_exc())
@@ -603,6 +609,8 @@ def webauthn_register_complete():
                 except sqlite3.Error as insert_error:
                     print(f"Register Complete Critical Error: Could not insert credential: {insert_error}")
                     conn.rollback()
+                    conn.close()
+                    return jsonify({'error': 'Database error during registration'}), 500
 
         conn.commit()
         conn.close()
@@ -1028,6 +1036,35 @@ def cleanup_credentials():
         
     except Exception as e:
         print(f"Cleanup Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/force_cleanup', methods=['GET', 'POST'])
+def force_cleanup_credentials():
+    """Admin function to clean up all credentials without auth check"""
+    try:
+        print("\n⭐ FORCE CLEANING UP ALL CREDENTIALS ⭐")
+        
+        # Connect to the database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Delete all credentials
+        cursor.execute("DELETE FROM security_keys")
+        conn.commit()
+        
+        # Get count of remaining credentials
+        cursor.execute("SELECT COUNT(*) FROM security_keys")
+        count = cursor.fetchone()[0]
+        
+        # Close the connection
+        conn.close()
+        
+        print(f"Force Cleanup: Removed all credentials. Remaining: {count}")
+        return jsonify({"success": True, "message": f"All credentials removed. Remaining: {count}"}), 200
+        
+    except Exception as e:
+        print(f"Force Cleanup Error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
