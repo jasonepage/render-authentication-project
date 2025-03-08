@@ -1,6 +1,8 @@
 /**
- * WebAuthn Client Handler v1.5.0
  * Optimized for cross-platform FIDO2 security key authentication
+ * 
+ * Author(s): Chris Becker, Jake McDowell, Jason Page
+ * Version: 1.0
  */
 const webAuthn = {
     version: '1.5.0',

@@ -7,8 +7,7 @@
  * - Polling for new messages
  * - Username display
  * 
- * Author: [Your Name]
- * Date: [Current Date]
+ * Author(s): Chris Becker, Jake McDowell, Jason Page
  * Version: 1.0
  */
 

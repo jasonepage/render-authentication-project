@@ -484,11 +484,10 @@ def webauthn_register_complete():
             except Exception as e:
                 print(f"Error extracting AAGUID: {e}")
             
-            # IMPORTANT: Only check for existing registrations by exact credential ID match
-            # This ensures each physical key gets its own account
+            # Check for existing registrations using multiple methods
             existing_key = None
             
-            # Method 1: Check by exact credential ID match
+            # Method 1: First check by exact credential ID match
             cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
             existing_key = cursor.fetchone()
             
@@ -498,9 +497,15 @@ def webauthn_register_complete():
                 cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
                 existing_key = cursor.fetchone()
             
+            # Method 3: If not found and we have an AAGUID, check by AAGUID
+            # This is the key for cross-device recognition of the same physical key
+            if not existing_key and aaguid:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE aaguid = ?", (aaguid,))
+                existing_key = cursor.fetchone()
+            
             if existing_key:
                 existing_user_id, existing_username = existing_key
-                print(f"Found existing registration for this credential ID: User {existing_user_id}")
+                print(f"Found existing registration for this physical key: User {existing_user_id}")
                 
                 # Set the user as authenticated with the existing account
                 session['authenticated'] = True
@@ -639,10 +644,22 @@ def webauthn_login_options():
         
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT credential_id, user_id FROM security_keys")
+        
+        # Get all credentials
+        cursor.execute("SELECT credential_id, user_id, aaguid FROM security_keys")
+        rows = cursor.fetchall()
+        
+        # Group credentials by AAGUID to find all credentials for the same physical key
+        aaguid_map = {}
+        for row in rows:
+            credential_id, user_id, aaguid = row
+            if aaguid:
+                if aaguid not in aaguid_map:
+                    aaguid_map[aaguid] = []
+                aaguid_map[aaguid].append((credential_id, user_id))
         
         credentials = []
-        for row in cursor.fetchall():
+        for row in rows:
             credential_id = row[0]
             user_id = row[1]
             
@@ -1057,10 +1074,21 @@ def force_cleanup_credentials():
         cursor.execute("SELECT COUNT(*) FROM security_keys")
         count = cursor.fetchone()[0]
         
+        # Also clear the messages table
+        try:
+            cursor.execute("DELETE FROM messages")
+            conn.commit()
+            print("Force Cleanup: Removed all messages")
+        except:
+            print("Force Cleanup: No messages table to clean")
+        
         # Close the connection
         conn.close()
         
-        print(f"Force Cleanup: Removed all credentials. Remaining: {count}")
+        # Clear the session
+        session.clear()
+        
+        print(f"Force Cleanup: Removed all credentials and cleared session. Remaining credentials: {count}")
         return jsonify({"success": True, "message": f"All credentials removed. Remaining: {count}"}), 200
         
     except Exception as e:
