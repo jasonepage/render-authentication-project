@@ -76,13 +76,23 @@ def init_db():
     ''')
     
     # Check if we need to add the username column to an existing table
-    cursor.execute("PRAGMA table_info(security_keys)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if 'username' not in columns:
-        print("Adding username column to security_keys table")
-        cursor.execute("ALTER TABLE security_keys ADD COLUMN username TEXT")
-        # Initialize existing users with their shortened user_id as username
-        cursor.execute("UPDATE security_keys SET username = substr(user_id, 1, 8) || '...' WHERE username IS NULL")
+    try:
+        cursor.execute("PRAGMA table_info(security_keys)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'username' not in columns:
+            print("Adding username column to security_keys table")
+            try:
+                cursor.execute("ALTER TABLE security_keys ADD COLUMN username TEXT")
+                # Initialize existing users with their shortened user_id as username
+                cursor.execute("UPDATE security_keys SET username = 'User-' || substr(user_id, 1, 8) WHERE username IS NULL")
+                conn.commit()
+                print("Successfully added username column")
+            except sqlite3.Error as e:
+                print(f"Warning: Could not add username column: {e}")
+                conn.rollback()
+    except Exception as e:
+        print(f"Warning: Error checking for username column: {e}")
+        # Continue with table creation regardless of this failure
     
     # Create messages table
     cursor.execute('''
@@ -193,30 +203,47 @@ def get_messages():
             conn.close()
             return jsonify([]), 200
         
-        # Retrieve messages with username information
-        c.execute("""
-            SELECT m.user_id, m.message, m.timestamp, s.username 
-            FROM messages m
-            LEFT JOIN security_keys s ON m.user_id = s.user_id
-            GROUP BY m.id
-            ORDER BY m.timestamp DESC 
-            LIMIT 50
-        """)
+        # Check if the username column exists in the security_keys table
+        c.execute("PRAGMA table_info(security_keys)")
+        columns = [col[1] for col in c.fetchall()]
+        has_username_column = 'username' in columns
+        
+        if has_username_column:
+            # Retrieve messages with username information
+            c.execute("""
+                SELECT m.user_id, m.message, m.timestamp, s.username 
+                FROM messages m
+                LEFT JOIN security_keys s ON m.user_id = s.user_id
+                GROUP BY m.id
+                ORDER BY m.timestamp DESC 
+                LIMIT 50
+            """)
+        else:
+            # Retrieve messages without username information
+            c.execute("""
+                SELECT user_id, message, timestamp 
+                FROM messages
+                ORDER BY timestamp DESC 
+                LIMIT 50
+            """)
         
         messages = []
         for row in c.fetchall():
             user_id = row[0]
             message = row[1]
             timestamp = row[2]
-            username = row[3]
             
-            # If no username found and not a system message, use a shortened user_id
-            if not username and user_id != 'system':
-                username = f"User-{user_id[:8]}"
-            
-            # For system messages, use 'System' as the display name
-            if user_id == 'system':
-                username = 'System'
+            if has_username_column:
+                username = row[3]
+                # If no username found and not a system message, use a shortened user_id
+                if not username and user_id != 'system':
+                    username = f"User-{user_id[:8]}"
+                # For system messages, use 'System' as the display name
+                if user_id == 'system':
+                    username = 'System'
+            else:
+                # Generate username from user_id when username column doesn't exist
+                username = 'System' if user_id == 'system' else f"User-{user_id[:8]}"
                 
             messages.append({
                 "user": user_id,
@@ -369,12 +396,38 @@ def webauthn_register_complete():
         if cursor.fetchone():
             print(f"Register Complete: Credential ID already exists, skipping insertion")
         else:
-            # Store only the normalized version
-            print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
-            cursor.execute(
-                "INSERT INTO security_keys (credential_id, user_id, username, public_key, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                (normalized_credential_id, user_id, initial_username, public_key)
-            )
+            try:
+                # Check if the username column exists
+                cursor.execute("PRAGMA table_info(security_keys)")
+                columns = [col[1] for col in cursor.fetchall()]
+                
+                if 'username' in columns:
+                    # Store with username if the column exists
+                    print(f"Register Complete: Storing credential with username and normalized ID: {normalized_credential_id[:20]}...")
+                    cursor.execute(
+                        "INSERT INTO security_keys (credential_id, user_id, username, public_key, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                        (normalized_credential_id, user_id, initial_username, public_key)
+                    )
+                else:
+                    # Store without username if the column doesn't exist
+                    print(f"Register Complete: Storing credential without username: {normalized_credential_id[:20]}...")
+                    cursor.execute(
+                        "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
+                        (normalized_credential_id, user_id, public_key)
+                    )
+            except sqlite3.Error as e:
+                print(f"Register Complete Error: Database error: {e}")
+                # Fallback to basic insertion without username
+                try:
+                    cursor.execute(
+                        "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
+                        (normalized_credential_id, user_id, public_key)
+                    )
+                except sqlite3.Error as insert_error:
+                    print(f"Register Complete Critical Error: Could not insert credential: {insert_error}")
+                    conn.rollback()
+                    conn.close()
+                    return jsonify({'error': 'Database error during registration'}), 500
         
         conn.commit()
         conn.close()
@@ -626,18 +679,27 @@ def send_message():
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             
-            # Update username for all credentials of this user
-            c.execute("UPDATE security_keys SET username = ? WHERE user_id = ?", (new_username, user_id))
-            conn.commit()
+            # Check if username column exists
+            c.execute("PRAGMA table_info(security_keys)")
+            columns = [col[1] for col in c.fetchall()]
             
-            # Add system message about username change
-            system_message = f"User {user_id} changed their username to {new_username}"
-            c.execute("INSERT INTO messages (user_id, message) VALUES ('system', ?)", (system_message,))
-            conn.commit()
-            
-            conn.close()
-            print(f"✅ Username changed to: {new_username}")
-            return jsonify({"success": True, "message": f"Username changed to {new_username}"}), 200
+            if 'username' in columns:
+                # Update username for all credentials of this user
+                c.execute("UPDATE security_keys SET username = ? WHERE user_id = ?", (new_username, user_id))
+                conn.commit()
+                
+                # Add system message about username change
+                system_message = f"User {user_id} changed their username to {new_username}"
+                c.execute("INSERT INTO messages (user_id, message) VALUES ('system', ?)", (system_message,))
+                conn.commit()
+                
+                conn.close()
+                print(f"✅ Username changed to: {new_username}")
+                return jsonify({"success": True, "message": f"Username changed to {new_username}"}), 200
+            else:
+                conn.close()
+                print("❌ Username column does not exist in the database")
+                return jsonify({"error": "Username feature is not available"}), 400
         except Exception as e:
             print(f"❌ Error changing username: {e}")
             print(traceback.format_exc())
@@ -681,14 +743,31 @@ def debug_all():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT credential_id, user_id, username, public_key, created_at FROM security_keys")
+        # Check if username column exists
+        cursor.execute("PRAGMA table_info(security_keys)")
+        columns = [col[1] for col in cursor.fetchall()]
+        has_username_column = 'username' in columns
+        
+        # Adjust query based on whether username column exists
+        if has_username_column:
+            cursor.execute("SELECT credential_id, user_id, username, public_key, created_at FROM security_keys")
+        else:
+            cursor.execute("SELECT credential_id, user_id, public_key, created_at FROM security_keys")
+        
         keys = []
         for row in cursor.fetchall():
             # Detailed credential info for debugging
             credential_id = row[0]
             user_id = row[1]
-            username = row[2]
-            public_key = row[3]
+            
+            if has_username_column:
+                username = row[2]
+                public_key = row[3]
+                created_at = row[4]
+            else:
+                username = f"User-{user_id[:8]}"  # Generate username from user_id
+                public_key = row[2]
+                created_at = row[3]
             
             # Check if credential_id is valid base64url
             credential_valid = True
@@ -707,7 +786,7 @@ def debug_all():
                 "user_id": user_id,
                 "username": username,
                 "public_key_snippet": str(public_key)[:30] + "..." if public_key else None,
-                "created_at": row[4]
+                "created_at": created_at
             })
         debug_data["security_keys"] = keys
         
