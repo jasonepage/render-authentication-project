@@ -64,7 +64,21 @@ const webAuthn = {
     
     // Register a new key
     async registerKey() {
-        this.log('Registration', 'Starting registration process...');
+        this.log('Registration', '=== STARTING REGISTRATION PROCESS ===');
+        
+        // Check if already authenticated
+        if (this.isAuthenticated) {
+            this.log('Registration', 'Warning: Already authenticated, but registration attempted');
+            alert('You are already registered and logged in. Please log out first if you want to register a new key.');
+            return;
+        }
+
+        // Check browser support
+        if (!window.PublicKeyCredential) {
+            this.log('Registration', '❌ Browser does not support WebAuthn');
+            throw new Error('WebAuthn is not supported in this browser');
+        }
+
         try {
             this.showModal('Touch your key to register...');
             
@@ -75,15 +89,25 @@ const webAuthn = {
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({ username: 'user' })
+            }).catch(error => {
+                this.log('Registration', `❌ Network error requesting options: ${error.message}`);
+                throw error;
             });
             
             if (!optionsResponse.ok) {
-                throw new Error('Failed to get registration options');
+                const error = await optionsResponse.text();
+                this.log('Registration', `❌ Server rejected options request: ${error}`);
+                throw new Error(`Failed to get registration options: ${error}`);
             }
             
             // 2. Parse the options
             const optionsJson = await optionsResponse.json();
             this.log('Registration', '2. Received registration options:', optionsJson);
+            
+            if (!optionsJson.challenge) {
+                this.log('Registration', '❌ No challenge in server response');
+                throw new Error('Invalid server response: missing challenge');
+            }
             
             // 3. Prepare options for the browser's WebAuthn API
             this.log('Registration', '3. Preparing options for WebAuthn API...');
@@ -110,15 +134,19 @@ const webAuthn = {
                 attestation: 'none'
             };
             
-            this.log('Registration', '4. Calling navigator.credentials.create...');
+            this.log('Registration', '4. Calling navigator.credentials.create with options:', publicKeyOptions);
             // 4. Call the WebAuthn API to create credentials
             const credential = await navigator.credentials.create({
                 publicKey: publicKeyOptions
+            }).catch(error => {
+                this.log('Registration', `❌ WebAuthn API error: ${error.message}`);
+                throw error;
             });
-            this.log('Registration', '4. Credential created:', credential);
+            
+            this.log('Registration', '5. Credential created successfully:', credential);
             
             // 5. Prepare response for the server
-            this.log('Registration', '5. Preparing response for server...');
+            this.log('Registration', '6. Preparing response for server...');
             const response = {
                 id: credential.id,
                 rawId: this.arrayBufferToBase64url(credential.rawId),
@@ -129,21 +157,26 @@ const webAuthn = {
                 }
             };
             
-            this.log('Registration', '6. Sending response to server...');
+            this.log('Registration', '7. Sending response to server...');
             // 6. Send the response to the server
             const verificationResponse = await fetch(`${this.SERVER_URL}/register_complete`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify(response)
+            }).catch(error => {
+                this.log('Registration', `❌ Network error sending verification: ${error.message}`);
+                throw error;
             });
             
             if (!verificationResponse.ok) {
-                throw new Error('Failed to register key');
+                const error = await verificationResponse.text();
+                this.log('Registration', `❌ Server rejected verification: ${error}`);
+                throw new Error(`Failed to register key: ${error}`);
             }
             
             const result = await verificationResponse.json();
-            this.log('Registration', '7. Registration complete:', result);
+            this.log('Registration', '✅ Registration complete:', result);
             
             this.hideModal();
             
@@ -161,8 +194,8 @@ const webAuthn = {
             return result;
         } catch (error) {
             this.hideModal();
-            this.log('Registration', '❌ Registration failed:', error);
-            alert(`Registration failed: ${error.message}`);
+            this.log('Registration', `❌ Registration failed: ${error.message}`);
+            this.log('Registration', 'Stack trace:', error.stack);
             throw error;
         }
     },
@@ -331,39 +364,121 @@ const webAuthn = {
     // Update UI based on authentication state
     updateUI() {
         this.log('UI Update', `Updating UI for auth state: ${this.isAuthenticated}`);
-        const registerBtn = document.getElementById('register-btn');
-        const loginBtn = document.getElementById('login-btn');
-        const logoutBtn = document.getElementById('logout-btn');
-        const messageInput = document.getElementById('message-input');
-        const sendBtn = document.getElementById('send-btn');
-        const authStatus = document.getElementById('auth-status');
         
+        // Get all UI elements
+        const elements = {
+            registerBtn: document.getElementById('register-btn'),
+            loginBtn: document.getElementById('login-btn'),
+            logoutBtn: document.getElementById('logout-btn'),
+            messageInput: document.getElementById('message-input'),
+            sendBtn: document.getElementById('send-btn'),
+            authStatus: document.getElementById('auth-status')
+        };
+
+        // Log which elements were found/not found
+        Object.entries(elements).forEach(([name, element]) => {
+            if (!element) {
+                console.error(`[WebAuthn] UI element not found: ${name}`);
+            }
+        });
+
         if (this.isAuthenticated) {
-            registerBtn.classList.add('hidden');
-            loginBtn.classList.add('hidden');
-            logoutBtn.classList.remove('hidden');
-            messageInput.disabled = false;
-            sendBtn.disabled = false;
-            authStatus.textContent = `Logged in as: ${this.userId}`;
-            this.log('UI Update', `UI updated for authenticated user: ${this.userId}`);
+            this.log('UI Update', `Updating UI for authenticated user: ${this.userId}`);
+            
+            // Hide auth buttons, show logout
+            elements.registerBtn?.classList.add('hidden');
+            elements.loginBtn?.classList.add('hidden');
+            elements.logoutBtn?.classList.remove('hidden');
+            
+            // Enable chat controls
+            if (elements.messageInput) elements.messageInput.disabled = false;
+            if (elements.sendBtn) elements.sendBtn.disabled = false;
+            
+            // Update status
+            if (elements.authStatus) {
+                elements.authStatus.textContent = `Logged in as: ${this.userId}`;
+                elements.authStatus.classList.remove('text-red-500');
+                elements.authStatus.classList.add('text-green-500');
+            }
         } else {
-            registerBtn.classList.remove('hidden');
-            loginBtn.classList.remove('hidden');
-            logoutBtn.classList.add('hidden');
-            messageInput.disabled = true;
-            sendBtn.disabled = true;
-            authStatus.textContent = 'Not logged in';
-            this.log('UI Update', 'UI updated for unauthenticated state');
+            this.log('UI Update', 'Updating UI for unauthenticated state');
+            
+            // Show auth buttons, hide logout
+            elements.registerBtn?.classList.remove('hidden');
+            elements.loginBtn?.classList.remove('hidden');
+            elements.logoutBtn?.classList.add('hidden');
+            
+            // Disable chat controls
+            if (elements.messageInput) elements.messageInput.disabled = true;
+            if (elements.sendBtn) elements.sendBtn.disabled = true;
+            
+            // Update status
+            if (elements.authStatus) {
+                elements.authStatus.textContent = 'Not logged in';
+                elements.authStatus.classList.remove('text-green-500');
+                elements.authStatus.classList.add('text-red-500');
+            }
         }
+
+        // Force a reflow to ensure CSS changes are applied
+        document.body.offsetHeight;
     },
     
     // Initialize
     init() {
         this.log('Init', 'Initializing WebAuthn...');
-        // Add event listeners
-        document.getElementById('register-btn')?.addEventListener('click', () => this.registerKey());
-        document.getElementById('login-btn')?.addEventListener('click', () => this.loginWithKey());
-        document.getElementById('logout-btn')?.addEventListener('click', () => this.logout());
+        
+        // Add event listeners with better error handling
+        const registerBtn = document.getElementById('register-btn');
+        if (registerBtn) {
+            this.log('Init', 'Found register button, adding click handler');
+            registerBtn.addEventListener('click', async (e) => {
+                this.log('Click', 'Register button clicked');
+                e.preventDefault();
+                try {
+                    if (!window.PublicKeyCredential) {
+                        throw new Error('WebAuthn is not supported in this browser');
+                    }
+                    await this.registerKey();
+                } catch (error) {
+                    console.error('[WebAuthn] Registration error:', error);
+                    alert(`Registration failed: ${error.message}`);
+                }
+            });
+        } else {
+            console.error('[WebAuthn] Register button not found in DOM');
+        }
+
+        // Add other event listeners with similar error handling
+        const loginBtn = document.getElementById('login-btn');
+        if (loginBtn) {
+            this.log('Init', 'Found login button, adding click handler');
+            loginBtn.addEventListener('click', async (e) => {
+                this.log('Click', 'Login button clicked');
+                e.preventDefault();
+                try {
+                    await this.loginWithKey();
+                } catch (error) {
+                    console.error('[WebAuthn] Login error:', error);
+                    alert(`Login failed: ${error.message}`);
+                }
+            });
+        }
+
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            this.log('Init', 'Found logout button, adding click handler');
+            logoutBtn.addEventListener('click', async (e) => {
+                this.log('Click', 'Logout button clicked');
+                e.preventDefault();
+                try {
+                    await this.logout();
+                } catch (error) {
+                    console.error('[WebAuthn] Logout error:', error);
+                    alert(`Logout failed: ${error.message}`);
+                }
+            });
+        }
         
         // Check initial auth status
         this.checkAuthStatus();
