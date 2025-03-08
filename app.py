@@ -69,10 +69,20 @@ def init_db():
         id INTEGER PRIMARY KEY,
         credential_id TEXT UNIQUE NOT NULL,
         user_id TEXT NOT NULL,
+        username TEXT,
         public_key TEXT NOT NULL,
         created_at TIMESTAMP NOT NULL
     )
     ''')
+    
+    # Check if we need to add the username column to an existing table
+    cursor.execute("PRAGMA table_info(security_keys)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'username' not in columns:
+        print("Adding username column to security_keys table")
+        cursor.execute("ALTER TABLE security_keys ADD COLUMN username TEXT")
+        # Initialize existing users with their shortened user_id as username
+        cursor.execute("UPDATE security_keys SET username = substr(user_id, 1, 8) || '...' WHERE username IS NULL")
     
     # Create messages table
     cursor.execute('''
@@ -183,8 +193,38 @@ def get_messages():
             conn.close()
             return jsonify([]), 200
         
-        c.execute("SELECT user_id, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT 50")
-        messages = [{"user": row[0], "message": row[1], "time": row[2]} for row in c.fetchall()]
+        # Retrieve messages with username information
+        c.execute("""
+            SELECT m.user_id, m.message, m.timestamp, s.username 
+            FROM messages m
+            LEFT JOIN security_keys s ON m.user_id = s.user_id
+            GROUP BY m.id
+            ORDER BY m.timestamp DESC 
+            LIMIT 50
+        """)
+        
+        messages = []
+        for row in c.fetchall():
+            user_id = row[0]
+            message = row[1]
+            timestamp = row[2]
+            username = row[3]
+            
+            # If no username found and not a system message, use a shortened user_id
+            if not username and user_id != 'system':
+                username = f"User-{user_id[:8]}"
+            
+            # For system messages, use 'System' as the display name
+            if user_id == 'system':
+                username = 'System'
+                
+            messages.append({
+                "user": user_id,
+                "username": username,
+                "message": message,
+                "time": timestamp
+            })
+            
         conn.close()
         
         print(f"Retrieved {len(messages)} messages")
@@ -297,6 +337,9 @@ def webauthn_register_complete():
         user_id = session['user_id_for_registration']
         print(f"Register Complete: Using user ID from session: {user_id}")
         
+        # Set initial username based on user_id
+        initial_username = f"User-{user_id[:8]}"
+        
         # Get the attestation response data
         if not data.get('response') or not data['response'].get('clientDataJSON') or not data['response'].get('attestationObject'):
             print("Register Error: Missing required attestation data")
@@ -329,8 +372,8 @@ def webauthn_register_complete():
             # Store only the normalized version
             print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
             cursor.execute(
-                "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
-                (normalized_credential_id, user_id, public_key)
+                "INSERT INTO security_keys (credential_id, user_id, username, public_key, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                (normalized_credential_id, user_id, initial_username, public_key)
             )
         
         conn.commit()
@@ -561,8 +604,8 @@ def send_message():
         print("❌ Invalid request - no message")
         return jsonify({"error": "Message is required"}), 400
     
-    message = data['message']
-    if not message.strip():
+    message = data['message'].strip()
+    if not message:
         print("❌ Empty message")
         return jsonify({"error": "Message cannot be empty"}), 400
     
@@ -570,6 +613,37 @@ def send_message():
     print(f"Message from user: {user_id}")
     print(f"Message content: {message[:50]}...")
     
+    # Check for command to change username
+    if message.startswith('/username '):
+        new_username = message[10:].strip()
+        if not new_username:
+            return jsonify({"error": "Username cannot be empty"}), 400
+        
+        if len(new_username) > 30:
+            return jsonify({"error": "Username too long (max 30 characters)"}), 400
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            # Update username for all credentials of this user
+            c.execute("UPDATE security_keys SET username = ? WHERE user_id = ?", (new_username, user_id))
+            conn.commit()
+            
+            # Add system message about username change
+            system_message = f"User {user_id} changed their username to {new_username}"
+            c.execute("INSERT INTO messages (user_id, message) VALUES ('system', ?)", (system_message,))
+            conn.commit()
+            
+            conn.close()
+            print(f"✅ Username changed to: {new_username}")
+            return jsonify({"success": True, "message": f"Username changed to {new_username}"}), 200
+        except Exception as e:
+            print(f"❌ Error changing username: {e}")
+            print(traceback.format_exc())
+            return jsonify({"error": str(e)}), 500
+    
+    # Regular message processing
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -582,7 +656,7 @@ def send_message():
         return jsonify({"success": True}), 200
     except Exception as e:
         print(f"❌ Error saving message: {e}")
-        print("Stack trace:", traceback.format_exc())
+        print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
 # ==========================================
@@ -607,19 +681,20 @@ def debug_all():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT credential_id, user_id, public_key, created_at FROM security_keys")
+        cursor.execute("SELECT credential_id, user_id, username, public_key, created_at FROM security_keys")
         keys = []
         for row in cursor.fetchall():
             # Detailed credential info for debugging
             credential_id = row[0]
             user_id = row[1]
-            public_key = row[2]
+            username = row[2]
+            public_key = row[3]
             
             # Check if credential_id is valid base64url
             credential_valid = True
             try:
                 # Try to decode the credential_id to check if it's valid
-                padded = credential_id + '=' * (4 - len(credential_id) % 4)
+                padded = credential_id + '=' * ((4 - len(credential_id) % 4) % 4)
                 standard = padded.replace('-', '+').replace('_', '/') 
                 base64.b64decode(standard)
             except Exception as e:
@@ -630,8 +705,9 @@ def debug_all():
                 "credential_id_length": len(credential_id),
                 "credential_valid_base64": credential_valid,
                 "user_id": user_id,
+                "username": username,
                 "public_key_snippet": str(public_key)[:30] + "..." if public_key else None,
-                "created_at": row[3]
+                "created_at": row[4]
             })
         debug_data["security_keys"] = keys
         

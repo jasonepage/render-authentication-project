@@ -33,8 +33,8 @@ const chat = {
                 if (data.messages.length > 0) {
                     // Assuming messages are sorted by time with newest last
                     const newestMessage = data.messages[data.messages.length - 1];
-                    if (newestMessage.timestamp) {
-                        this.lastMessageTime = new Date(newestMessage.timestamp).getTime();
+                    if (newestMessage.time) {
+                        this.lastMessageTime = new Date(newestMessage.time).getTime();
                     }
                 }
             }
@@ -47,48 +47,56 @@ const chat = {
     
     // Display messages in the chat container
     displayMessages(messages) {
-        // Clear loading message
-        this.elements.messagesContainer.innerHTML = '';
+        const messageList = document.getElementById('message-list');
+        if (!messageList) return;
+        
+        messageList.innerHTML = '';
         
         if (messages.length === 0) {
-            this.showSystemMessage('No messages yet. Be the first to send a message!');
+            const emptyMessage = document.createElement('div');
+            emptyMessage.className = 'message-item system-message';
+            emptyMessage.innerHTML = '<span class="message-user">System</span> <span class="message-text">No messages yet. Start chatting!</span>';
+            messageList.appendChild(emptyMessage);
             return;
         }
         
-        // Add each message to the container
         messages.forEach(message => {
             const messageElement = document.createElement('div');
-            messageElement.classList.add('message');
             
-            // Check if message is from current user
+            // Determine if this is a system message
+            const isSystem = message.user === 'system';
+            
+            // Determine if this is the current user
             const isCurrentUser = webAuthn.isAuthenticated && message.user === webAuthn.userId;
-            messageElement.classList.add(isCurrentUser ? 'message-user' : 'message-other');
             
-            // Create message content
-            const metaElement = document.createElement('div');
-            metaElement.classList.add('message-meta');
-            
-            // Format the timestamp
-            let timestamp;
-            try {
-                timestamp = new Date(message.time).toLocaleString();
-            } catch (e) {
-                timestamp = message.time; // Fallback to raw timestamp
+            // Add appropriate CSS classes
+            messageElement.className = 'message-item';
+            if (isSystem) {
+                messageElement.classList.add('system-message');
+            } else if (isCurrentUser) {
+                messageElement.classList.add('own-message');
             }
             
-            metaElement.textContent = `${message.user} • ${timestamp}`;
+            // Format time if available
+            const time = message.time ? formatTime(new Date(message.time)) : '';
             
-            const textElement = document.createElement('div');
-            textElement.textContent = message.message;
+            // Use username if available, otherwise use user ID
+            const displayName = message.username || `User-${message.user.substring(0, 8)}`;
             
-            messageElement.appendChild(metaElement);
-            messageElement.appendChild(textElement);
+            // Display as "You" for current user
+            const userDisplay = isCurrentUser ? 'You' : displayName;
             
-            this.elements.messagesContainer.appendChild(messageElement);
+            messageElement.innerHTML = `
+                <span class="message-user">${userDisplay}</span>
+                <span class="message-text">${escapeHtml(message.message)}</span>
+                <span class="message-time">${time}</span>
+            `;
+            
+            messageList.appendChild(messageElement);
         });
         
-        // Scroll to the bottom
-        this.scrollToBottom();
+        // Scroll to the bottom of the message list
+        messageList.scrollTop = messageList.scrollHeight;
     },
     
     // Show a system message in the chat
@@ -205,6 +213,46 @@ const chat = {
         }
     }
 };
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Helper function to format time
+function formatTime(date) {
+    if (!(date instanceof Date)) return '';
+    
+    try {
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        // Format for today: HH:MM
+        if (date.toDateString() === today.toDateString()) {
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        // Format for yesterday: Yesterday, HH:MM
+        if (date.toDateString() === yesterday.toDateString()) {
+            return `Yesterday, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        }
+        
+        // Format for other days: MM/DD/YYYY, HH:MM
+        return date.toLocaleString([], { 
+            month: 'numeric', 
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit', 
+            minute: '2-digit'
+        });
+    } catch (e) {
+        console.error('Error formatting time:', e);
+        return '';
+    }
+}
 
 // Initialize chat when the page loads
 document.addEventListener('DOMContentLoaded', () => {

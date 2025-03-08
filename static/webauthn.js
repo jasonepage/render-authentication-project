@@ -696,14 +696,24 @@ const webAuthn = {
                 messageElement.classList.add('own-message');
             }
             
-            // Format the user ID for display (either "You" or first 8 chars)
-            let displayUser = isCurrentUser ? 'You' : message.user.substring(0, 8) + '...';
+            // Format the user ID for display (either "You" or username or first 8 chars)
+            let displayUser = isCurrentUser ? 'You' : (message.username || `User-${message.user.substring(0, 8)}`);
             
-            // Create message content
+            // Format time if available
+            let timeDisplay = '';
+            if (message.time) {
+                try {
+                    const date = new Date(message.time);
+                    timeDisplay = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                } catch (e) {
+                    this.logError('Error formatting time:', e);
+                }
+            }
+            
             messageElement.innerHTML = `
                 <span class="message-user">${displayUser}</span>
                 <span class="message-text">${this.escapeHtml(message.message)}</span>
-                <span class="message-time">${this.formatTime(message.time)}</span>
+                <span class="message-time">${timeDisplay}</span>
             `;
             
             messageList.appendChild(messageElement);
