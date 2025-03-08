@@ -33,6 +33,7 @@ from functools import wraps
 import sys
 import platform
 import datetime
+import traceback
 
 app = Flask(__name__)
 
@@ -47,35 +48,60 @@ CORS(app,
      methods=["GET", "POST", "OPTIONS"]
 )
 
+@app.before_request
+def log_request_info():
+    """Log details about every incoming request"""
+    print("\n=== REQUEST INFO ===")
+    print(f"Method: {request.method}")
+    print(f"Path: {request.path}")
+    print(f"Headers: {dict(request.headers)}")
+    if request.is_json:
+        print(f"JSON Data: {request.get_json()}")
+    print(f"Session: {dict(session)}")
+    print("==================\n")
+
+@app.after_request
+def log_response_info(response):
+    """Log details about every outgoing response"""
+    print("\n=== RESPONSE INFO ===")
+    print(f"Status: {response.status}")
+    print(f"Headers: {dict(response.headers)}")
+    try:
+        if response.is_json:
+            print(f"JSON Data: {response.get_json()}")
+    except:
+        print("Response body is not JSON")
+    print("==================\n")
+    return response
+
 def init_db():
-    """
-    Initialize SQLite database with required tables.
-    
-    Creates two tables:
-    1. security_keys: Stores FIDO2 security key registration data
-       - credential_id (TEXT): Unique identifier for each security key
-       - public_key (TEXT): Public key used for verification
-       
-    2. messages: Stores chat messages
-       - id (INTEGER): Auto-incrementing message ID
-       - user_id (TEXT): ID of the user who sent the message
-       - message (TEXT): Content of the message
-       - timestamp (DATETIME): When the message was sent
-    """
+    """Initialize SQLite database with required tables."""
+    print("\n=== DATABASE INITIALIZATION ===")
     try:
         # Use a data directory that's guaranteed to be writable on Render
         db_path = os.path.join(os.environ.get('HOME', ''), 'webauthn.db')
         os.environ['DATABASE_PATH'] = db_path
-        print(f"Using database at: {db_path}")
+        print(f"Database path: {db_path}")
+        
+        # Check directory permissions
+        db_dir = os.path.dirname(db_path)
+        print(f"Directory exists: {os.path.exists(db_dir)}")
+        print(f"Directory writable: {os.access(db_dir, os.W_OK)}")
         
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
+        
+        # Create security_keys table
+        print("Creating security_keys table...")
         c.execute('''
             CREATE TABLE IF NOT EXISTS security_keys (
                 credential_id TEXT PRIMARY KEY,
                 public_key TEXT
             )
         ''')
+        
+        # Create messages table
+        print("Creating messages table...")
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,11 +110,18 @@ def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Verify tables were created
+        c.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = c.fetchall()
+        print(f"Existing tables: {tables}")
+        
         conn.commit()
         conn.close()
-        print("Database initialized successfully")
+        print("✅ Database initialized successfully")
     except Exception as e:
-        print(f"Error initializing database: {e}")
+        print(f"❌ Error initializing database: {e}")
+        print("Stack trace:", traceback.format_exc())
 
 # Initialize database at startup
 init_db()
@@ -401,20 +434,29 @@ def decode_signature(signature):
 
 @app.route('/send_message', methods=['POST'])
 def send_message():
+    """Handle sending a chat message"""
     print("\n=== MESSAGE SEND ATTEMPT ===")
+    print("1. Checking authentication...")
+    
     if not session.get('authenticated'):
         print("❌ Message rejected: User not authenticated")
+        print(f"Current session: {dict(session)}")
         return jsonify({"error": "Authentication required"}), 401
     
+    print("\n2. Validating message...")
     message = request.json.get('message')
     if not message:
         print("❌ Message rejected: Empty message")
         return jsonify({"error": "Message required"}), 400
     
     user_id = session.get('user_id')
-    print(f"User {user_id} sending message: {message[:30]}...")
+    print(f"3. Processing message from user {user_id}:")
+    print(f"Message content: {message[:100]}...")
     
+    print("\n4. Saving to database...")
     db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
+    print(f"Using database: {db_path}")
+    
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
@@ -426,6 +468,7 @@ def send_message():
         return jsonify({"success": True}), 200
     except Exception as e:
         print(f"❌ Error saving message: {e}")
+        print("Stack trace:", traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
@@ -461,26 +504,31 @@ def rate_limit(max_per_minute=60):
     return decorator
 
 @app.route('/get_messages', methods=['GET'])
-@rate_limit(max_per_minute=60)  # Allow 1 request per second on average
+@rate_limit(max_per_minute=60)
 def get_messages():
+    """Retrieve chat messages"""
     print("\n=== MESSAGE RETRIEVAL REQUEST ===")
+    print("1. Checking rate limit...")
     
-    # Remove the authentication check - allow anyone to read messages
-    # if not session.get('authenticated'):
-    #     print("❌ Message retrieval rejected: User not authenticated")
-    #     return jsonify({"error": "Authentication required"}), 401
-    
+    print("\n2. Retrieving messages from database...")
     db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
+    print(f"Using database: {db_path}")
+    
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
     try:
         c.execute("SELECT user_id, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT 50")
         messages = [{"user": row[0], "message": row[1], "time": row[2]} for row in c.fetchall()]
-        print(f"✅ Retrieved {len(messages)} messages for public viewing")
+        print(f"✅ Retrieved {len(messages)} messages")
+        if messages:
+            print("Latest messages:")
+            for msg in messages[:3]:  # Show last 3 messages
+                print(f"  - {msg['user']}: {msg['message'][:30]}...")
         return jsonify({"messages": messages}), 200
     except Exception as e:
         print(f"❌ Error retrieving messages: {e}")
+        print("Stack trace:", traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
@@ -579,26 +627,30 @@ def bytes_to_base64url(bytes_value):
 def webauthn_register_options():
     """Generate registration options for WebAuthn"""
     print("\n=== WEBAUTHN REGISTRATION OPTIONS REQUEST ===")
+    print("1. Generating cryptographic values...")
     
     # Generate a random user ID
     user_id = secrets.token_bytes(16)
     user_id_b64 = bytes_to_base64url(user_id)
+    print(f"Generated user ID: {user_id_b64}")
     
     # Generate a random challenge
     challenge = generate_challenge()
+    print(f"Generated challenge: {challenge}")
     
+    print("\n2. Setting session data...")
     # Store in session for verification later
     session['challenge'] = challenge
     session['user_id'] = user_id_b64
+    print(f"Updated session: {dict(session)}")
     
     # Default display name based on IP or a random string
     display_name = request.remote_addr or f"User-{secrets.token_hex(4)}"
+    print(f"Using display name: {display_name}")
     
-    print(f"Created challenge: {challenge[:10]}...")
-    print(f"Created user ID: {user_id_b64[:10]}...")
-    
-    # Create and return the options
-    return jsonify({
+    print("\n3. Creating registration options...")
+    # Create registration options
+    options = {
         "challenge": challenge,
         "rp": {
             "name": "FIDO2 Chat System",
@@ -614,139 +666,165 @@ def webauthn_register_options():
         ],
         "timeout": 60000,
         "attestation": "none"
-    })
+    }
+    print(f"Registration options created: {json.dumps(options, indent=2)}")
+    
+    return jsonify(options)
 
 @app.route('/register_complete', methods=['POST'])
 def webauthn_register_complete():
     """Complete the registration process for WebAuthn"""
     print("\n=== WEBAUTHN REGISTRATION COMPLETION ===")
+    print("1. Validating request data...")
     
     try:
         # Get the registration data from the request
         data = request.json
+        print(f"Received registration data: {json.dumps(data, indent=2)}")
         
+        print("\n2. Checking session challenge...")
         # Verify that this is the same session that requested registration
         expected_challenge = session.get('challenge')
         if not expected_challenge:
             print("❌ No challenge found in session")
+            print(f"Current session: {dict(session)}")
             return jsonify({"error": "Registration session expired"}), 400
         
+        print("\n3. Processing client data...")
         # Get the client data and attestation object
         client_data_json = base64url_to_bytes(data['response']['clientDataJSON'])
         attestation_object = base64url_to_bytes(data['response']['attestationObject'])
         
         # Parse the client data
         client_data = json.loads(client_data_json.decode('utf-8'))
+        print(f"Parsed client data: {json.dumps(client_data, indent=2)}")
         
+        print("\n4. Verifying challenge...")
         # Verify challenge
         received_challenge = client_data.get('challenge')
         if received_challenge != expected_challenge:
-            print(f"❌ Challenge mismatch: {received_challenge[:10]}... vs {expected_challenge[:10]}...")
+            print("❌ Challenge verification failed")
+            print(f"Expected: {expected_challenge}")
+            print(f"Received: {received_challenge}")
             return jsonify({"error": "Challenge verification failed"}), 400
         
+        print("\n5. Verifying request type...")
         # Verify type
         if client_data.get('type') != 'webauthn.create':
             print(f"❌ Incorrect type: {client_data.get('type')}")
             return jsonify({"error": "Incorrect request type"}), 400
         
+        print("\n6. Verifying origin...")
         # Verify origin
-        if not client_data.get('origin', '').endswith('render-authentication-project.onrender.com'):
-            print(f"❌ Origin mismatch: {client_data.get('origin')}")
+        origin = client_data.get('origin', '')
+        if not origin.endswith('render-authentication-project.onrender.com'):
+            print(f"❌ Origin mismatch: {origin}")
             return jsonify({"error": "Origin verification failed"}), 400
-            
-        # In a real implementation, we would validate the attestation signature here
-        # For this example, we'll extract the credential ID and public key
         
-        # Get credential ID (using rawId from the response)
+        print("\n7. Storing credential...")
+        # Get credential ID
         credential_id = data['rawId']
+        print(f"Credential ID: {credential_id[:10]}...")
         
-        # For this example, we'll use a simplified approach
-        # In a real implementation, you would properly parse the CBOR attestation object
-        
-        # Connect to the database
+        # Connect to database
         db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
+        print(f"Using database: {db_path}")
+        
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         
-        # Generate a simplified public key (would be extracted from attestation in real impl)
-        # This is just a placeholder - in production you'd extract the real key
+        # Generate public key data
         public_key = {
             "1": 2,  # kty: EC2
             "3": -7,  # alg: ES256
             "-1": 1,  # curve: P-256
-            "-2": secrets.token_hex(32),  # x-coordinate (placeholder)
-            "-3": secrets.token_hex(32)   # y-coordinate (placeholder)
+            "-2": secrets.token_hex(32),
+            "-3": secrets.token_hex(32)
         }
+        print("Generated public key data")
         
-        # Store in the database
         try:
+            print("Inserting credential into database...")
             c.execute("INSERT INTO security_keys (credential_id, public_key) VALUES (?, ?)",
                   (credential_id, json.dumps(public_key)))
             conn.commit()
-            print(f"✅ WebAuthn credential registered successfully! ID: {credential_id[:10]}...")
             
+            print("\n8. Setting up session...")
             # Set as authenticated
             session['authenticated'] = True
-            session['user_id'] = credential_id[:10]  # Use credential ID prefix as user ID
+            session['user_id'] = credential_id[:10]
+            print(f"Updated session: {dict(session)}")
             
+            print("\n✅ Registration successful!")
             return jsonify({
                 "status": "success",
                 "message": "Registration successful",
                 "userId": credential_id[:10]
             })
         except sqlite3.IntegrityError:
-            print(f"❌ Registration failed: Credential already exists: {credential_id[:10]}...")
+            print(f"❌ Credential already exists: {credential_id[:10]}...")
             return jsonify({"error": "Credential already exists"}), 400
         finally:
             conn.close()
             
     except Exception as e:
         print(f"❌ Registration error: {str(e)}")
+        print("Stack trace:", traceback.format_exc())
         return jsonify({"error": f"Registration failed: {str(e)}"}), 500
 
 @app.route('/login_options', methods=['POST'])
 def webauthn_login_options():
     """Generate authentication options for WebAuthn"""
     print("\n=== WEBAUTHN LOGIN OPTIONS REQUEST ===")
+    print("1. Generating challenge...")
     
     # Generate a random challenge
     challenge = generate_challenge()
+    print(f"Generated challenge: {challenge}")
     
+    print("\n2. Setting session data...")
     # Store in session for verification later
     session['challenge'] = challenge
+    print(f"Updated session: {dict(session)}")
     
-    print(f"Created challenge: {challenge[:10]}...")
-    
+    print("\n3. Retrieving credentials from database...")
     # Get all credentials from the database
     db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
+    print(f"Using database: {db_path}")
+    
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
     try:
         c.execute("SELECT credential_id FROM security_keys")
         credentials = c.fetchall()
+        print(f"Found {len(credentials)} credential(s)")
         
         # Format for WebAuthn
         allowed_credentials = []
         for cred in credentials:
             cred_id = cred[0]
+            print(f"  - Credential: {cred_id[:10]}...")
             allowed_credentials.append({
                 "type": "public-key",
                 "id": cred_id,
                 "transports": ["usb", "nfc"]
             })
         
-        print(f"Found {len(allowed_credentials)} credential(s) for authentication")
-        
-        return jsonify({
+        print("\n4. Creating authentication options...")
+        options = {
             "challenge": challenge,
             "timeout": 60000,
             "rpId": "render-authentication-project.onrender.com",
             "allowCredentials": allowed_credentials,
             "userVerification": "discouraged"
-        })
+        }
+        print(f"Authentication options created: {json.dumps(options, indent=2)}")
+        
+        return jsonify(options)
     except Exception as e:
         print(f"❌ Error getting credentials: {str(e)}")
+        print("Stack trace:", traceback.format_exc())
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
@@ -755,50 +833,73 @@ def webauthn_login_options():
 def webauthn_login_complete():
     """Complete the authentication process for WebAuthn"""
     print("\n=== WEBAUTHN LOGIN COMPLETION ===")
+    print("1. Validating request data...")
+    print(f"Request headers: {dict(request.headers)}")
     
     try:
         # Get the authentication data from the request
         data = request.json
+        print("Received authentication data:")
+        print(json.dumps({
+            "id": data.get('id'),
+            "rawId": data.get('rawId', '')[:10] + "...",
+            "type": data.get('type'),
+            "response": {
+                "clientDataJSON": data.get('response', {}).get('clientDataJSON', '')[:10] + "...",
+                "authenticatorData": data.get('response', {}).get('authenticatorData', '')[:10] + "...",
+                "signature": data.get('response', {}).get('signature', '')[:10] + "...",
+                "userHandle": data.get('response', {}).get('userHandle')
+            }
+        }, indent=2))
         
+        print("\n2. Checking session challenge...")
         # Verify that this is the same session that requested authentication
         expected_challenge = session.get('challenge')
         if not expected_challenge:
             print("❌ No challenge found in session")
+            print(f"Current session: {dict(session)}")
             return jsonify({"error": "Authentication session expired"}), 400
         
-        # Get credential ID
+        print("\n3. Processing client data...")
+        # Get credential ID and authentication data
         credential_id = data['rawId']
         print(f"Authenticating credential: {credential_id[:10]}...")
         
-        # Get the client data and authenticator data
         client_data_json = base64url_to_bytes(data['response']['clientDataJSON'])
         authenticator_data = base64url_to_bytes(data['response']['authenticatorData'])
         signature = base64url_to_bytes(data['response']['signature'])
         
         # Parse the client data
         client_data = json.loads(client_data_json.decode('utf-8'))
+        print(f"Parsed client data: {json.dumps(client_data, indent=2)}")
         
+        print("\n4. Verifying challenge...")
         # Verify challenge
         received_challenge = client_data.get('challenge')
         if received_challenge != expected_challenge:
-            print(f"❌ Challenge mismatch: {received_challenge[:10]}... vs {expected_challenge[:10]}...")
+            print("❌ Challenge verification failed")
+            print(f"Expected: {expected_challenge}")
+            print(f"Received: {received_challenge}")
             return jsonify({"error": "Challenge verification failed"}), 400
         
+        print("\n5. Verifying request type...")
         # Verify type
         if client_data.get('type') != 'webauthn.get':
             print(f"❌ Incorrect type: {client_data.get('type')}")
             return jsonify({"error": "Incorrect request type"}), 400
         
+        print("\n6. Verifying origin...")
         # Verify origin
-        if not client_data.get('origin', '').endswith('render-authentication-project.onrender.com'):
-            print(f"❌ Origin mismatch: {client_data.get('origin')}")
+        origin = client_data.get('origin', '')
+        if not origin.endswith('render-authentication-project.onrender.com'):
+            print(f"❌ Origin mismatch: {origin}")
             return jsonify({"error": "Origin verification failed"}), 400
         
-        # In a real implementation, we would validate the signature here
-        # For this example, we'll assume it's valid if we can find the credential
-        
+        print("\n7. Looking up credential...")
         # Get the credential from the database
         db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
+        print(f"Using database: {db_path}")
+        
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         
@@ -810,12 +911,13 @@ def webauthn_login_complete():
             print(f"❌ Credential not found: {credential_id[:10]}...")
             return jsonify({"error": "Credential not found"}), 404
         
+        print("\n8. Setting up session...")
         # Set as authenticated
         session['authenticated'] = True
         session['user_id'] = credential_id[:10]  # Use credential ID prefix as user ID
+        print(f"Updated session: {dict(session)}")
         
-        print(f"✅ WebAuthn authentication successful for user: {credential_id[:10]}...")
-        
+        print("\n✅ Authentication successful!")
         return jsonify({
             "status": "success",
             "message": "Authentication successful",
@@ -824,6 +926,7 @@ def webauthn_login_complete():
             
     except Exception as e:
         print(f"❌ Authentication error: {str(e)}")
+        print("Stack trace:", traceback.format_exc())
         return jsonify({"error": f"Authentication failed: {str(e)}"}), 500
 
 @app.route('/logout', methods=['POST'])
@@ -844,14 +947,19 @@ def webauthn_logout():
 def webauthn_auth_status():
     """Check if the user is authenticated"""
     print("\n=== WEBAUTHN AUTH STATUS CHECK ===")
+    print("Current session data:", dict(session))
     
     is_authenticated = session.get('authenticated', False)
     user_id = session.get('user_id', None) if is_authenticated else None
     
     if is_authenticated:
-        print(f"User is authenticated: {user_id}")
+        print(f"✅ User is authenticated: {user_id}")
     else:
-        print("User is not authenticated")
+        print("❌ User is not authenticated")
+        if 'authenticated' in session:
+            print("  'authenticated' is False in session")
+        else:
+            print("  'authenticated' not found in session")
     
     return jsonify({
         "authenticated": is_authenticated,
