@@ -12,9 +12,9 @@
             <h1>FIDO2 Chat</h1>
             <div class="auth-status">
                 <span id="status-message">Not authenticated</span>
-                <button id="register-button" class="action-button">Register</button>
-                <button id="login-button" class="action-button">Login</button>
-                <button id="logout-button" class="action-button hidden">Logout</button>
+                <button id="register-button" class="action-button" onclick="webAuthn.registerKey(); return false;">Register</button>
+                <button id="login-button" class="action-button" onclick="webAuthn.loginWithKey(); return false;">Login</button>
+                <button id="logout-button" class="action-button hidden" onclick="webAuthn.logout(); return false;">Logout</button>
             </div>
         </header>
 

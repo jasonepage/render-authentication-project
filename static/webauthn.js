@@ -1,614 +1,458 @@
-// FIDO2 WebAuthn JavaScript Client
-// Version: 1.1
-// Last Modified: March 2025
-
-// Force print to ensure this file is loading
-console.log("WEBAUTHN.JS LOADED - FRESH VERSION");
-
-// WebAuthn API handling for key communication
+/**
+ * WebAuthn Client Handler v1.4.1
+ * Simplified and robust implementation for cross-device FIDO2 WebAuthn
+ */
 const webAuthn = {
-    // Server URL and configuration
-    SERVER_URL: window.location.origin,
+    version: '1.4.1',
     
-    // Get the correct rpId based on the current domain
-    getRpId() {
-        const hostname = window.location.hostname;
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return hostname;
-        }
-        return 'render-authentication-project.onrender.com';
+    log: function(message) {
+        console.log(`WebAuthn [${this.version}]: ${message}`);
     },
     
-    // Keep track of authentication state
-    isAuthenticated: false,
-    userId: null,
-    
-    // Force logout on page load to fix session issues
-    async forceLogout() {
-        console.log("🚨 FORCE LOGOUT - Clearing stale session");
-        try {
-            const response = await fetch(`${this.SERVER_URL}/logout`, {
-                method: 'POST',
-                credentials: 'include'
-            });
-            console.log("Force logout result:", response.ok);
-            return response.ok;
-        } catch (error) {
-            console.error("Force logout failed:", error);
-            return false;
-        }
-    },
-    
-    // Debug logging
-    log(step, message, data = null) {
-        const logMessage = `[WebAuthn] ${step}: ${message}`;
-        data ? console.log(logMessage, data) : console.log(logMessage);
-    },
-    
-    // Convert base64url to ArrayBuffer
-    base64urlToArrayBuffer(base64url) {
-        this.log('Base64URL Decode', `Converting: ${base64url.substring(0, 10)}...`);
-        const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
-        const padding = '===='.slice(0, (4 - (base64.length % 4)) % 4);
-        const base64String = base64 + padding;
-        const binary = atob(base64String);
+    // Base64URL to ArrayBuffer
+    base64urlToArrayBuffer: function(base64url) {
+        this.log(`Converting base64url to ArrayBuffer: ${base64url.substring(0, 20)}...`);
+        const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
+        const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/') + padding;
+        const binary = atob(base64);
         const buffer = new ArrayBuffer(binary.length);
-        const bytes = new Uint8Array(buffer);
-        
+        const view = new Uint8Array(buffer);
         for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
+            view[i] = binary.charCodeAt(i);
         }
-        
-        this.log('Base64URL Decode', 'Conversion complete', { length: buffer.byteLength });
+        this.log(`Conversion completed, buffer length: ${buffer.byteLength}`);
         return buffer;
     },
     
-    // Convert ArrayBuffer to base64url
-    arrayBufferToBase64url(buffer) {
-        this.log('Base64URL Encode', `Converting buffer of length: ${buffer.byteLength}`);
-        const bytes = new Uint8Array(buffer);
+    // ArrayBuffer to Base64URL
+    arrayBufferToBase64url: function(buffer) {
+        this.log(`Converting ArrayBuffer to base64url, buffer length: ${buffer.byteLength}`);
+        const view = new Uint8Array(buffer);
         let binary = '';
-        
-        for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
+        for (let i = 0; i < view.length; i++) {
+            binary += String.fromCharCode(view[i]);
         }
-        
         const base64 = btoa(binary);
         const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-        this.log('Base64URL Encode', `Result: ${base64url.substring(0, 10)}...`);
+        this.log(`Conversion result: ${base64url.substring(0, 20)}...`);
         return base64url;
     },
     
-    // Show modal during key operations
-    showModal(message) {
-        this.log('UI', `Showing modal: ${message}`);
-        document.getElementById('modal-message').textContent = message;
-        document.getElementById('modal').classList.remove('hidden');
+    // Show modal with message
+    showModal: function(message) {
+        this.log(`Showing modal: ${message}`);
+        const modal = document.getElementById('auth-modal');
+        const modalText = document.getElementById('modal-text');
+        if (modal && modalText) {
+            modalText.textContent = message;
+            modal.style.display = 'block';
+        } else {
+            alert(message);
+        }
     },
     
     // Hide modal
-    hideModal() {
-        this.log('UI', 'Hiding modal');
-        document.getElementById('modal').classList.add('hidden');
-    },
-    
-    // Register a new key
-    async registerKey() {
-        this.log('Registration', '=== STARTING REGISTRATION PROCESS ===');
-        
-        // Force logout first to clear any stale session
-        await this.logout().catch(e => this.log('Registration', 'Logout before registration failed:', e));
-        
-        // Check browser support
-        if (!window.PublicKeyCredential) {
-            this.log('Registration', '❌ Browser does not support WebAuthn');
-            throw new Error('WebAuthn is not supported in this browser');
+    hideModal: function() {
+        this.log('Hiding modal');
+        const modal = document.getElementById('auth-modal');
+        if (modal) {
+            modal.style.display = 'none';
         }
+    },
 
-        try {
-            this.showModal('Touch your key to register...');
+    // Register a new security key
+    registerKey: function() {
+        this.log('Starting registration process');
+        this.showModal('Please insert your security key and follow the browser instructions...');
+
+        // Step 1: Get registration options from server
+        fetch('/register_options', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to get registration options');
+            }
+            return response.json();
+        })
+        .then(options => {
+            this.log(`Received registration options: ${JSON.stringify(options).substring(0, 100)}...`);
             
-            this.log('Registration', '1. Requesting registration options from server...');
-            // 1. Get registration options from the server
-            const optionsResponse = await fetch(`${this.SERVER_URL}/register_options`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify({ username: 'user' })
-            }).catch(error => {
-                this.log('Registration', `❌ Network error requesting options: ${error.message}`);
-                throw error;
-            });
+            // Convert base64url encoded values to ArrayBuffer as required by WebAuthn
+            options.challenge = this.base64urlToArrayBuffer(options.challenge);
             
-            if (!optionsResponse.ok) {
-                const error = await optionsResponse.text();
-                this.log('Registration', `❌ Server rejected options request: ${error}`);
-                throw new Error(`Failed to get registration options: ${error}`);
+            if (options.user && options.user.id) {
+                options.user.id = this.base64urlToArrayBuffer(options.user.id);
             }
             
-            // 2. Parse the options
-            const optionsJson = await optionsResponse.json();
-            this.log('Registration', '2. Received registration options:', optionsJson);
-            
-            if (!optionsJson.challenge) {
-                this.log('Registration', '❌ No challenge in server response');
-                throw new Error('Invalid server response: missing challenge');
-            }
-            
-            // 3. Prepare options for the browser's WebAuthn API
-            this.log('Registration', '3. Preparing options for WebAuthn API...');
-            const rpId = this.getRpId();
-            this.log('Registration', `Using rpId: ${rpId}`);
-            
-            const publicKeyOptions = {
-                challenge: this.base64urlToArrayBuffer(optionsJson.challenge),
-                rp: {
-                    name: 'FIDO2 Chat System',
-                    id: rpId
-                },
-                user: {
-                    id: this.base64urlToArrayBuffer(optionsJson.user.id),
-                    name: optionsJson.user.name,
-                    displayName: optionsJson.user.displayName
-                },
-                pubKeyCredParams: [
-                    { type: 'public-key', alg: -7 } // ES256 algorithm
-                ],
-                authenticatorSelection: {
-                    authenticatorAttachment: 'cross-platform',
-                    requireResidentKey: false,
-                    userVerification: 'discouraged'
-                },
-                timeout: 60000,
-                attestation: 'none'
-            };
-            
-            this.log('Registration', '4. Calling navigator.credentials.create with options:', publicKeyOptions);
-            // 4. Call the WebAuthn API to create credentials
-            const credential = await navigator.credentials.create({
-                publicKey: publicKeyOptions
-            }).catch(error => {
-                this.log('Registration', `❌ WebAuthn API error: ${error.message}`);
-                throw error;
-            });
-            
-            if (!credential) {
-                this.log('Registration', '❌ No credential returned from WebAuthn API');
-                throw new Error('WebAuthn API failed to create credential');
-            }
-            
-            this.log('Registration', '5. Credential created successfully:', credential);
-            
-            // 5. Prepare response for the server
-            this.log('Registration', '6. Preparing response for server...');
-            const response = {
-                id: credential.id,
-                rawId: this.arrayBufferToBase64url(credential.rawId),
-                type: credential.type,
-                response: {
-                    clientDataJSON: this.arrayBufferToBase64url(credential.response.clientDataJSON),
-                    attestationObject: this.arrayBufferToBase64url(credential.response.attestationObject)
+            if (options.excludeCredentials) {
+                for (let i = 0; i < options.excludeCredentials.length; i++) {
+                    options.excludeCredentials[i].id = this.base64urlToArrayBuffer(options.excludeCredentials[i].id);
                 }
-            };
-            
-            this.log('Registration', '7. Sending response to server...');
-            // 6. Send the response to the server
-            const verificationResponse = await fetch(`${this.SERVER_URL}/register_complete`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify(response)
-            }).catch(error => {
-                this.log('Registration', `❌ Network error sending verification: ${error.message}`);
-                throw error;
-            });
-            
-            if (!verificationResponse.ok) {
-                const error = await verificationResponse.text();
-                this.log('Registration', `❌ Server rejected verification: ${error}`);
-                throw new Error(`Failed to register key: ${error}`);
             }
             
-            const result = await verificationResponse.json();
-            this.log('Registration', '✅ Registration complete:', result);
+            this.log('Converted challenge and IDs to ArrayBuffer, calling navigator.credentials.create()');
             
-            this.hideModal();
-            
-            // Update authentication state immediately
-            this.isAuthenticated = true;
-            this.userId = result.userId;
-            this.updateUI();
-            
-            // Trigger event for chat.js
-            const event = new CustomEvent('userAuthenticated', {
-                detail: { userId: this.userId }
+            // Step 2: Create credentials using WebAuthn API
+            return navigator.credentials.create({
+                publicKey: options
             });
-            document.dispatchEvent(event);
+        })
+        .then(credential => {
+            this.log('Credential created successfully, preparing data for server');
             
-            alert('Registration successful! You are now logged in.');
-            return result;
-        } catch (error) {
-            this.hideModal();
-            this.log('Registration', `❌ Registration failed: ${error.message}`);
-            this.log('Registration', 'Stack trace:', error.stack);
-            alert(`Registration failed: ${error.message}\nPlease check the console for more details.`);
-            throw error;
-        }
-    },
-    
-    // Login with key
-    async loginWithKey() {
-        this.log('Login', 'Starting login process...');
-        try {
-            this.showModal('Touch your key to login...');
+            // Prepare the credential data to send to server
+            const credentialId = this.arrayBufferToBase64url(credential.rawId);
+            const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
+            const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
             
-            this.log('Login', '1. Requesting login options from server...');
-            // 1. Get authentication options from the server
-            const optionsResponse = await fetch(`${this.SERVER_URL}/login_options`, {
+            this.log(`Credential ID: ${credentialId.substring(0, 20)}...`);
+            
+            // Step 3: Send credential data to server
+            return fetch('/register_complete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include'
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    id: credentialId,
+                    rawId: credentialId,
+                    type: credential.type,
+                    response: {
+                        clientDataJSON: clientDataJSON,
+                        attestationObject: attestationObject
+                    }
+                })
             });
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to complete registration');
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log(`Registration complete, result: ${JSON.stringify(result)}`);
+            this.hideModal();
             
-            if (!optionsResponse.ok) {
+            // Update the UI to reflect the authenticated state
+            this.updateUI(true);
+            
+            // Alert the user
+            alert('Security key registered successfully!');
+        })
+        .catch(error => {
+            this.log(`Registration error: ${error.message}`);
+            this.hideModal();
+            alert(`Registration failed: ${error.message}`);
+        });
+        
+        return false; // Prevent form submission
+    },
+
+    // Login with a registered security key
+    loginWithKey: function() {
+        this.log('Starting login process');
+        this.showModal('Please insert your security key and follow the browser instructions...');
+
+        // Step 1: Get login options from server
+        fetch('/login_options', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
                 throw new Error('Failed to get login options');
             }
+            return response.json();
+        })
+        .then(options => {
+            this.log(`Received login options: ${JSON.stringify(options).substring(0, 100)}...`);
             
-            // 2. Parse the options
-            const optionsJson = await optionsResponse.json();
-            this.log('Login', '2. Received login options:', optionsJson);
+            // Convert base64url encoded values to ArrayBuffer
+            options.challenge = this.base64urlToArrayBuffer(options.challenge);
             
-            // 3. Prepare options for the browser's WebAuthn API
-            this.log('Login', '3. Preparing options for WebAuthn API...');
-            const publicKeyOptions = {
-                challenge: this.base64urlToArrayBuffer(optionsJson.challenge),
-                rpId: 'render-authentication-project.onrender.com',
-                timeout: 60000,
-                userVerification: 'discouraged'
-            };
-            
-            // If we have allowCredentials from the server, add them
-            if (optionsJson.allowCredentials && optionsJson.allowCredentials.length > 0) {
-                this.log('Login', `Found ${optionsJson.allowCredentials.length} allowed credential(s)`);
-                publicKeyOptions.allowCredentials = optionsJson.allowCredentials.map(cred => ({
-                    id: this.base64urlToArrayBuffer(cred.id),
-                    type: 'public-key',
-                    transports: ['usb', 'nfc']
-                }));
-            }
-            
-            this.log('Login', '4. Calling navigator.credentials.get...');
-            // 4. Call the WebAuthn API to get assertion
-            const assertion = await navigator.credentials.get({
-                publicKey: publicKeyOptions
-            });
-            this.log('Login', '4. Assertion received:', assertion);
-            
-            // 5. Prepare response for the server
-            this.log('Login', '5. Preparing response for server...');
-            const response = {
-                id: assertion.id,
-                rawId: this.arrayBufferToBase64url(assertion.rawId),
-                type: assertion.type,
-                response: {
-                    clientDataJSON: this.arrayBufferToBase64url(assertion.response.clientDataJSON),
-                    authenticatorData: this.arrayBufferToBase64url(assertion.response.authenticatorData),
-                    signature: this.arrayBufferToBase64url(assertion.response.signature),
-                    userHandle: assertion.response.userHandle ? this.arrayBufferToBase64url(assertion.response.userHandle) : null
+            if (options.allowCredentials) {
+                this.log(`Found ${options.allowCredentials.length} allowCredentials`);
+                for (let i = 0; i < options.allowCredentials.length; i++) {
+                    options.allowCredentials[i].id = this.base64urlToArrayBuffer(options.allowCredentials[i].id);
+                    this.log(`Converted credential ${i+1}: ${options.allowCredentials[i].id.byteLength} bytes`);
                 }
-            };
+            } else {
+                this.log('No allowCredentials found in options');
+            }
             
-            this.log('Login', '6. Sending response to server...');
-            // 6. Send the assertion to the server
-            const verificationResponse = await fetch(`${this.SERVER_URL}/login_complete`, {
+            this.log('Converted challenge and credential IDs to ArrayBuffer, calling navigator.credentials.get()');
+            
+            // Step 2: Get credentials using WebAuthn API
+            return navigator.credentials.get({
+                publicKey: options
+            });
+        })
+        .then(assertion => {
+            this.log('Assertion received successfully, preparing data for server');
+            
+            // Prepare the assertion data to send to server
+            const credentialId = this.arrayBufferToBase64url(assertion.rawId);
+            const clientDataJSON = this.arrayBufferToBase64url(assertion.response.clientDataJSON);
+            const authenticatorData = this.arrayBufferToBase64url(assertion.response.authenticatorData);
+            const signature = this.arrayBufferToBase64url(assertion.response.signature);
+            
+            this.log(`Assertion credential ID: ${credentialId.substring(0, 20)}...`);
+            
+            // Step 3: Send assertion to server
+            return fetch('/login_complete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify(response)
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    id: credentialId,
+                    rawId: credentialId,
+                    type: assertion.type,
+                    response: {
+                        clientDataJSON: clientDataJSON,
+                        authenticatorData: authenticatorData,
+                        signature: signature,
+                        userHandle: assertion.response.userHandle ? this.arrayBufferToBase64url(assertion.response.userHandle) : null
+                    }
+                })
             });
-            
-            if (!verificationResponse.ok) {
-                throw new Error('Failed to login with key');
-            }
-            
-            const result = await verificationResponse.json();
-            this.log('Login', '7. Login complete:', result);
-            
-            // Update authentication state
-            this.isAuthenticated = true;
-            this.userId = result.userId;
-            
-            this.hideModal();
-            this.updateUI();
-            
-            // Trigger event for chat.js
-            const event = new CustomEvent('userAuthenticated', {
-                detail: { userId: this.userId }
-            });
-            document.dispatchEvent(event);
-            
-            return result;
-        } catch (error) {
-            this.hideModal();
-            this.log('Login', '❌ Login failed:', error);
-            alert(`Login failed: ${error.message}`);
-            throw error;
-        }
-    },
-    
-    // Log out
-    async logout() {
-        this.log('Logout', 'Starting logout process...');
-        try {
-            const response = await fetch(`${this.SERVER_URL}/logout`, {
-                method: 'POST',
-                credentials: 'include'
-            });
-            
+        })
+        .then(response => {
             if (!response.ok) {
-                throw new Error('Logout failed');
+                throw new Error('Failed to complete login');
             }
+            return response.json();
+        })
+        .then(result => {
+            this.log(`Login complete, result: ${JSON.stringify(result)}`);
+            this.hideModal();
             
-            this.isAuthenticated = false;
-            this.userId = null;
-            this.updateUI();
+            // Update the UI to reflect the authenticated state
+            this.updateUI(true);
             
-            this.log('Logout', 'Logout successful');
-            
-            // Trigger event for chat.js
-            document.dispatchEvent(new Event('userLoggedOut'));
-        } catch (error) {
-            this.log('Logout', '❌ Logout failed:', error);
-            alert(`Logout failed: ${error.message}`);
-        }
+            // Alert the user
+            alert('Login successful!');
+        })
+        .catch(error => {
+            this.log(`Login error: ${error.message}`);
+            this.hideModal();
+            alert(`Login failed: ${error.message}`);
+        });
+        
+        return false; // Prevent form submission
     },
-    
-    // Check if user is already authenticated
-    async checkAuthStatus() {
-        this.log('Auth Check', 'Checking authentication status...');
-        try {
-            const response = await fetch(`${this.SERVER_URL}/auth_status`, {
-                credentials: 'include'
-            });
-            
+
+    // Logout
+    logout: function() {
+        this.log('Logging out');
+        
+        fetch('/logout', {
+            method: 'POST',
+            credentials: 'include'
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to logout');
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log('Logout successful');
+            this.updateUI(false);
+        })
+        .catch(error => {
+            this.log(`Logout error: ${error.message}`);
+            alert(`Logout failed: ${error.message}`);
+        });
+        
+        return false; // Prevent form submission
+    },
+
+    // Check authentication status
+    checkAuthStatus: function() {
+        this.log('Checking authentication status');
+        
+        fetch('/auth_status', {
+            method: 'GET',
+            credentials: 'include'
+        })
+        .then(response => {
             if (!response.ok) {
                 throw new Error('Failed to check auth status');
             }
-            
-            const data = await response.json();
-            this.log('Auth Check', 'Status received:', data);
-            
-            this.isAuthenticated = data.authenticated;
-            this.userId = data.userId;
-            this.updateUI();
-            
-            if (this.isAuthenticated) {
-                this.log('Auth Check', `User is authenticated as: ${this.userId}`);
-                // Trigger event for chat.js
-                const event = new CustomEvent('userAuthenticated', {
-                    detail: { userId: this.userId }
-                });
-                document.dispatchEvent(event);
-            } else {
-                this.log('Auth Check', 'User is not authenticated');
-            }
-        } catch (error) {
-            this.log('Auth Check', '❌ Auth check failed:', error);
-        }
+            return response.json();
+        })
+        .then(result => {
+            this.log(`Auth status: ${JSON.stringify(result)}`);
+            this.updateUI(result.authenticated);
+        })
+        .catch(error => {
+            this.log(`Auth status error: ${error.message}`);
+            console.error('Failed to check authentication status:', error);
+            this.updateUI(false); // Assume not authenticated on error
+        });
     },
-    
+
     // Update UI based on authentication state
-    updateUI() {
-        this.log('UI Update', `Updating UI for auth state: ${this.isAuthenticated}`);
+    updateUI: function(isAuthenticated) {
+        this.log(`Updating UI, authenticated: ${isAuthenticated}`);
         
-        // Get all UI elements
-        const elements = {
-            registerBtn: document.getElementById('register-button'),
-            loginBtn: document.getElementById('login-button'),
-            logoutBtn: document.getElementById('logout-button'),
-            messageInput: document.getElementById('message-input'),
-            sendBtn: document.getElementById('send-button'),
-            authStatus: document.getElementById('status-message')
-        };
-
-        // Log which elements were found/not found
-        Object.entries(elements).forEach(([name, element]) => {
-            if (!element) {
-                console.error(`[WebAuthn] UI element not found: ${name}`);
-            }
-        });
-
-        if (this.isAuthenticated) {
-            this.log('UI Update', `Updating UI for authenticated user: ${this.userId}`);
+        const authDiv = document.getElementById('auth-status');
+        const chatForm = document.getElementById('chat-form');
+        const messageList = document.getElementById('message-list');
+        
+        if (isAuthenticated) {
+            // User is authenticated, show logout button and chat
+            authDiv.innerHTML = `
+                <p>You are authenticated!</p>
+                <button onclick="webAuthn.logout(); return false;">Logout</button>
+            `;
             
-            // Hide auth buttons, show logout
-            elements.registerBtn?.classList.add('hidden');
-            elements.loginBtn?.classList.add('hidden');
-            elements.logoutBtn?.classList.remove('hidden');
+            if (chatForm) chatForm.style.display = 'block';
+            if (messageList) messageList.style.display = 'block';
             
-            // Enable chat controls
-            if (elements.messageInput) elements.messageInput.disabled = false;
-            if (elements.sendBtn) elements.sendBtn.disabled = false;
-            
-            // Update status
-            if (elements.authStatus) {
-                elements.authStatus.textContent = `Logged in as: ${this.userId}`;
-                elements.authStatus.classList.remove('text-red-500');
-                elements.authStatus.classList.add('text-green-500');
-            }
+            // Start fetching messages
+            this.startMessagePolling();
         } else {
-            this.log('UI Update', 'Updating UI for unauthenticated state');
+            // User is not authenticated, show register and login buttons
+            authDiv.innerHTML = `
+                <p>You are not authenticated.</p>
+                <button onclick="webAuthn.registerKey(); return false;">Register Security Key</button>
+                <button onclick="webAuthn.loginWithKey(); return false;">Login</button>
+            `;
             
-            // Show auth buttons, hide logout
-            elements.registerBtn?.classList.remove('hidden');
-            elements.loginBtn?.classList.remove('hidden');
-            elements.logoutBtn?.classList.add('hidden');
+            if (chatForm) chatForm.style.display = 'none';
+            if (messageList) messageList.style.display = 'none';
             
-            // Disable chat controls
-            if (elements.messageInput) elements.messageInput.disabled = true;
-            if (elements.sendBtn) elements.sendBtn.disabled = true;
-            
-            // Update status
-            if (elements.authStatus) {
-                elements.authStatus.textContent = 'Not logged in';
-                elements.authStatus.classList.remove('text-green-500');
-                elements.authStatus.classList.add('text-red-500');
+            // Stop message polling
+            this.stopMessagePolling();
+        }
+    },
+
+    // Start polling for chat messages
+    startMessagePolling: function() {
+        this.log('Starting message polling');
+        
+        if (!this.messageInterval) {
+            this.messageInterval = setInterval(() => {
+                this.fetchMessages();
+            }, 2000); // Poll every 2 seconds
+        }
+    },
+
+    // Stop polling for chat messages
+    stopMessagePolling: function() {
+        this.log('Stopping message polling');
+        
+        if (this.messageInterval) {
+            clearInterval(this.messageInterval);
+            this.messageInterval = null;
+        }
+    },
+
+    // Fetch chat messages
+    fetchMessages: function() {
+        fetch('/messages', {
+            method: 'GET',
+            credentials: 'include'
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to fetch messages');
             }
-        }
-
-        // Force a reflow to ensure CSS changes are applied
-        document.body.offsetHeight;
-    },
-    
-    // Direct initialization with basic event handlers - simplest approach
-    directInit() {
-        console.log("⚡DIRECT INIT - Setting up event handlers");
-        
-        // Get buttons
-        const registerButton = document.getElementById('register-button');
-        const loginButton = document.getElementById('login-button');
-        const logoutButton = document.getElementById('logout-button');
-        
-        // Log what we found
-        console.log("Register button found:", !!registerButton);
-        console.log("Login button found:", !!loginButton);
-        console.log("Logout button found:", !!logoutButton);
-        
-        // Set up button handlers directly
-        if (registerButton) {
-            console.log("ATTACHING REGISTER HANDLER");
-            registerButton.onclick = () => {
-                console.log("REGISTER BUTTON CLICKED");
-                this.registerKey();
-                return false;
-            };
-        }
-        
-        if (loginButton) {
-            console.log("ATTACHING LOGIN HANDLER");
-            loginButton.onclick = () => {
-                console.log("LOGIN BUTTON CLICKED");
-                this.loginWithKey();
-                return false;
-            };
-        }
-        
-        if (logoutButton) {
-            console.log("ATTACHING LOGOUT HANDLER");
-            logoutButton.onclick = () => {
-                console.log("LOGOUT BUTTON CLICKED");
-                this.logout();
-                return false;
-            };
-        }
-        
-        // Check auth status
-        this.checkAuthStatus();
-    },
-    
-    // Initialize
-    init() {
-        console.log("🚀 WEBAUTHN INIT STARTING");
-        
-        // Force clear any stale session
-        this.forceLogout().then(() => {
-            console.log("🔄 Session cleared, initializing UI");
-            
-            // Use direct initialization for maximum reliability
-            this.directInit();
-            
-            // Also try the more robust approach
-            setTimeout(() => {
-                // Simple direct event handlers for reliability
-                const registerBtn = document.getElementById('register-button');
-                if (registerBtn) {
-                    console.log("📝 REGISTER BUTTON FOUND!");
-                    registerBtn.addEventListener('click', (e) => {
-                        console.log("🔴 REGISTER BUTTON CLICKED!");
-                        e.preventDefault();
-                        this.registerKey();
-                    });
-                } else {
-                    console.error("❌ REGISTER BUTTON NOT FOUND IN DOM");
-                }
-
-                const loginBtn = document.getElementById('login-button');
-                if (loginBtn) {
-                    console.log("📝 LOGIN BUTTON FOUND!");
-                    loginBtn.addEventListener('click', (e) => {
-                        console.log("🔴 LOGIN BUTTON CLICKED!");
-                        e.preventDefault();
-                        this.loginWithKey();
-                    });
-                }
-
-                const logoutBtn = document.getElementById('logout-button');
-                if (logoutBtn) {
-                    console.log("📝 LOGOUT BUTTON FOUND!");
-                    logoutBtn.addEventListener('click', (e) => {
-                        console.log("🔴 LOGOUT BUTTON CLICKED!");
-                        e.preventDefault();
-                        this.logout();
-                    });
-                }
-            }, 1000);
-            
-            // Update UI immediately before checking status
-            this.isAuthenticated = false;
-            this.userId = null;
-            this.updateUI();
-            
-            // Check auth status
-            this.checkAuthStatus();
+            return response.json();
+        })
+        .then(messages => {
+            const messageList = document.getElementById('message-list');
+            if (messageList) {
+                messageList.innerHTML = '';
+                
+                messages.forEach(msg => {
+                    const messageItem = document.createElement('div');
+                    messageItem.className = 'message-item';
+                    messageItem.innerHTML = `
+                        <strong>${msg.user_id}</strong>: ${msg.message} <span class="timestamp">${msg.timestamp}</span>
+                    `;
+                    messageList.appendChild(messageItem);
+                });
+                
+                // Scroll to bottom
+                messageList.scrollTop = messageList.scrollHeight;
+            }
+        })
+        .catch(error => {
+            console.error('Failed to fetch messages:', error);
         });
+    },
+
+    // Send a chat message
+    sendMessage: function(event) {
+        event.preventDefault();
+        
+        const messageInput = document.getElementById('message-input');
+        const message = messageInput.value.trim();
+        
+        if (message) {
+            this.log(`Sending message: ${message}`);
+            
+            fetch('/send_message', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message: message })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to send message');
+                }
+                return response.json();
+            })
+            .then(result => {
+                this.log('Message sent successfully');
+                messageInput.value = '';
+                this.fetchMessages(); // Update messages immediately
+            })
+            .catch(error => {
+                this.log(`Send message error: ${error.message}`);
+                alert(`Failed to send message: ${error.message}`);
+            });
+        }
+    },
+
+    // Initialize the application
+    init: function() {
+        this.log('Initializing WebAuthn client');
+        
+        // Check authentication status on page load
+        this.checkAuthStatus();
+        
+        // Setup event handlers
+        const chatForm = document.getElementById('chat-form');
+        if (chatForm) {
+            chatForm.addEventListener('submit', (event) => {
+                this.sendMessage(event);
+            });
+        }
+        
+        this.log('Initialization complete');
     }
 };
 
-// Initialize when DOM is fully loaded
-document.addEventListener('DOMContentLoaded', () => {
-    console.log("🏁 DOM LOADED - INITIALIZING WEBAUTHN");
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+    webAuthn.log('DOM content loaded, initializing WebAuthn client');
     webAuthn.init();
-});
-
-// Also initialize immediately in case DOMContentLoaded already fired
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    console.log("⚡ DOM ALREADY LOADED - INITIALIZING WEBAUTHN IMMEDIATELY");
-    setTimeout(() => webAuthn.init(), 100);
-}
-
-// Direct attachment of event handlers to button elements - most reliable approach
-window.addEventListener('load', () => {
-    console.log("🌐 WINDOW LOADED - DIRECT EVENT ATTACHMENT");
-    
-    // Direct approach - get elements and set onclick handlers
-    const registerButton = document.getElementById('register-button');
-    const loginButton = document.getElementById('login-button');
-    const logoutButton = document.getElementById('logout-button');
-    
-    if (registerButton) {
-        registerButton.onclick = function(e) {
-            e.preventDefault();
-            console.log("📣 REGISTER CLICK (direct)");
-            webAuthn.registerKey();
-            return false;
-        };
-    }
-    
-    if (loginButton) {
-        loginButton.onclick = function(e) {
-            e.preventDefault();
-            console.log("📣 LOGIN CLICK (direct)");
-            webAuthn.loginWithKey();
-            return false;
-        };
-    }
-    
-    if (logoutButton) {
-        logoutButton.onclick = function(e) {
-            e.preventDefault();
-            console.log("📣 LOGOUT CLICK (direct)");
-            webAuthn.logout();
-            return false;
-        };
-    }
 }); 
