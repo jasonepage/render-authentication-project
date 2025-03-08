@@ -39,12 +39,10 @@ if os.environ.get('FLASK_ENV') == 'testing':
 else:
     DB_PATH = os.environ.get('DB_PATH', '/opt/render/webauthn.db')
 
-# Configuration for registration limits
+# Configuration for registration limits - simplify to just enable resident keys
 REGISTRATION_LIMITS = {
-    'max_per_day': 3,  # Maximum registrations allowed per day per browser
-    'cooldown_hours': 4,  # Hours between registrations
-    'enforce_limits': True,  # Set to False to disable limits
-    'use_resident_key': True  # Use resident keys for security keys that support this feature
+    'enforce_limits': False,  # Disable all limits
+    'use_resident_key': True  # Use resident keys for all security keys
 }
 
 # ==========================================
@@ -340,7 +338,7 @@ def webauthn_register_options():
             print(f"Register Options: Error getting credentials to exclude: {e}")
             # Continue without exclusion if there's an error
             
-        # Create the options
+        # Create the options - always use resident keys
         options = {
             "challenge": challenge,
             "rp": {
@@ -358,12 +356,12 @@ def webauthn_register_options():
             ],
             "authenticatorSelection": {
                 "authenticatorAttachment": "cross-platform",  # Request external security keys
-                "requireResidentKey": REGISTRATION_LIMITS['use_resident_key'],  # Use resident keys for fixed identity
-                "residentKey": "preferred" if REGISTRATION_LIMITS['use_resident_key'] else "discouraged",  # New parameter in WebAuthn Level 2
+                "requireResidentKey": True,  # Always require resident keys
+                "residentKey": "required",   # Make it required, not just preferred
                 "userVerification": "preferred"  # Encourage user verification for better security
             },
             "timeout": 60000,
-            "attestation": "direct",  # Request attestation to help identify the authenticator model
+            "attestation": "direct",  # Request attestation to help identify the authenticator
             "excludeCredentials": exclude_credentials
         }
         
@@ -398,78 +396,6 @@ def webauthn_register_complete():
         user_id = session['user_id_for_registration']
         print(f"Register Complete: Using user ID from session: {user_id}")
         
-        # Check registration limits if enabled
-        if REGISTRATION_LIMITS['enforce_limits']:
-            # Get browser fingerprint from User-Agent and other headers
-            user_agent = request.headers.get('User-Agent', '')
-            accept_lang = request.headers.get('Accept-Language', '')
-            platform = request.headers.get('Sec-Ch-Ua-Platform', '')
-            
-            # Create a simple fingerprint hash
-            fingerprint = hashlib.sha256(f"{user_agent}|{accept_lang}|{platform}".encode()).hexdigest()
-            print(f"Register Complete: Browser fingerprint: {fingerprint[:20]}...")
-            
-            # Check registration history for this browser fingerprint
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            
-            # Add browser_fingerprint and registration_time columns if they don't exist
-            cursor.execute("PRAGMA table_info(security_keys)")
-            columns = [col[1] for col in cursor.fetchall()]
-            
-            if 'browser_fingerprint' not in columns:
-                print("Adding browser_fingerprint column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN browser_fingerprint TEXT")
-                conn.commit()
-                
-            if 'registration_time' not in columns:
-                print("Adding registration_time column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN registration_time TIMESTAMP")
-                conn.commit()
-            
-            # Get current time
-            current_time = datetime.datetime.now().isoformat()
-            
-            # Count registrations from this browser in the last 24 hours
-            one_day_ago = (datetime.datetime.now() - datetime.timedelta(days=1)).isoformat()
-            cursor.execute(
-                "SELECT COUNT(*), MAX(registration_time) FROM security_keys WHERE browser_fingerprint = ? AND registration_time > ?", 
-                (fingerprint, one_day_ago)
-            )
-            result = cursor.fetchone()
-            count_today = result[0] if result else 0
-            last_registration = result[1] if result and len(result) > 1 else None
-            
-            # Check if we're within the cooldown period
-            if last_registration:
-                try:
-                    last_reg_time = datetime.datetime.fromisoformat(last_registration)
-                    time_since_last = datetime.datetime.now() - last_reg_time
-                    cooldown_period = datetime.timedelta(hours=REGISTRATION_LIMITS['cooldown_hours'])
-                    
-                    if time_since_last < cooldown_period:
-                        hours_to_wait = (cooldown_period - time_since_last).total_seconds() / 3600
-                        print(f"Register Error: Too soon since last registration. Need to wait {hours_to_wait:.1f} more hours")
-                        conn.close()
-                        return jsonify({
-                            'error': f'Please wait {hours_to_wait:.1f} more hours before registering another security key.'
-                        }), 429
-                except Exception as e:
-                    print(f"Error parsing registration time: {e}")
-            
-            # Check daily limit
-            if count_today >= REGISTRATION_LIMITS['max_per_day']:
-                print(f"Register Error: Browser has reached the maximum number of registrations today ({REGISTRATION_LIMITS['max_per_day']})")
-                conn.close()
-                return jsonify({
-                    'error': f'Maximum number of registrations reached. You can register up to {REGISTRATION_LIMITS["max_per_day"]} security keys per day.'
-                }), 429
-            
-            # Store the fingerprint and time for later use
-            session['browser_fingerprint'] = fingerprint
-            session['registration_time'] = current_time
-            conn.close()
-        
         # Set initial username based on user_id
         initial_username = f"User-{user_id[:8]}"
         
@@ -503,22 +429,10 @@ def webauthn_register_complete():
                 cursor.execute("ALTER TABLE security_keys ADD COLUMN aaguid TEXT")
                 conn.commit()
                 
-            # Add raw_id column if it doesn't exist (for additional matching)
-            if 'raw_id' not in columns:
-                print("Adding raw_id column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN raw_id TEXT")
-                conn.commit()
-                
             # Add combined_hash column if it doesn't exist
             if 'combined_hash' not in columns:
                 print("Adding combined_hash column to security_keys table")
                 cursor.execute("ALTER TABLE security_keys ADD COLUMN combined_hash TEXT")
-                conn.commit()
-                
-            # Add authenticator_model column if it doesn't exist
-            if 'authenticator_model' not in columns:
-                print("Adding authenticator_model column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN authenticator_model TEXT")
                 conn.commit()
                 
             # Add is_resident_key column if it doesn't exist
@@ -534,23 +448,14 @@ def webauthn_register_complete():
             # 2. Secondary hash (combination of attestation and client data)
             combined_hash = hashlib.sha256((attestation_object_b64 + client_data_json_b64).encode()).hexdigest()
             
-            # 3. Raw ID for additional matching
-            raw_id = credential_id
-            
             print(f"Generated attestation hash: {attestation_hash[:20]}...")
             print(f"Generated combined hash: {combined_hash[:20]}...")
             
-            # Try to extract AAGUID and other info from attestation
+            # Try to extract AAGUID from attestation
             aaguid = None
-            authenticator_model = None
-            is_resident_key = REGISTRATION_LIMITS['use_resident_key']
-            
             try:
-                # Parse the attestation object to extract AAGUID and other info
+                # Parse the attestation object to extract AAGUID
                 attestation_bytes = base64url_to_bytes(attestation_object_b64)
-                
-                # Try to parse CBOR data (simplified approach)
-                # In a production environment, use a proper CBOR parser library
                 
                 # Look for AAGUID pattern (16 bytes, typically non-zero)
                 for i in range(len(attestation_bytes) - 16):
@@ -561,44 +466,9 @@ def webauthn_register_complete():
                             aaguid = aaguid_hex
                             print(f"Extracted AAGUID: {aaguid}")
                             break
-                
-                # Try to determine the authenticator model from attestation data
-                # Convert to string to look for model identifiers
-                attestation_str = attestation_bytes.decode('utf-8', errors='ignore')
-                
-                # Check for common security key manufacturers in the attestation
-                # This helps identify the type of security key without mentioning specific brands
-                if any(manufacturer in attestation_str for manufacturer in ['FIDO', 'U2F', 'Security Key']):
-                    authenticator_model = "Security Key"
-                    
-                    # Try to determine specific model types without mentioning brands
-                    if any(model in attestation_str for model in ['5Ci', '5 Ci']):
-                        authenticator_model = "Multi-connector Security Key"
-                    elif any(model in attestation_str for model in ['5C', '5 C']):
-                        authenticator_model = "USB-C Security Key"
-                    elif any(model in attestation_str for model in ['5NFC', '5 NFC', 'NFC']):
-                        authenticator_model = "NFC-enabled Security Key"
-                    elif any(model in attestation_str for model in ['Bio', 'Biometric']):
-                        authenticator_model = "Biometric Security Key"
-                    
-                    print(f"Detected authenticator model: {authenticator_model}")
-                
-                # If we have an AAGUID but couldn't determine the model, try to look it up
-                if aaguid and not authenticator_model:
-                    # Known AAGUIDs for common authenticators
-                    # This is a simplified approach - in production, use a proper database
-                    aaguid_to_model = {
-                        # Add known AAGUIDs here as you discover them
-                        # Example: "f8a011f38c0a4d15800617111f9edc7d": "Multi-connector Security Key"
-                    }
-                    
-                    if aaguid in aaguid_to_model:
-                        authenticator_model = aaguid_to_model[aaguid]
-                        print(f"Identified model from AAGUID: {authenticator_model}")
-                
             except Exception as e:
-                print(f"Error extracting authenticator info: {e}")
-                print(traceback.format_exc())
+                print(f"Error extracting AAGUID: {e}")
+                # Continue without AAGUID if there's an error
             
             # Check for existing registrations using multiple methods
             existing_key = None
@@ -613,14 +483,14 @@ def webauthn_register_complete():
                 cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
                 existing_key = cursor.fetchone()
             
-            # Method 3: If not found and this is a resident key, check by attestation hash
-            if not existing_key and is_resident_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ? AND is_resident_key = 1", (attestation_hash,))
+            # Method 3: If not found, check by attestation hash
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
                 existing_key = cursor.fetchone()
                 
-            # Method 4: If not found and this is a resident key, check by combined hash
-            if not existing_key and is_resident_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ? AND is_resident_key = 1", (combined_hash,))
+            # Method 4: If not found, check by combined hash
+            if not existing_key:
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ?", (combined_hash,))
                 existing_key = cursor.fetchone()
             
             if existing_key:
@@ -646,8 +516,6 @@ def webauthn_register_complete():
             print(f"  - Credential ID: {credential_id[:20]}...")
             print(f"  - Attestation hash: {attestation_hash[:20]}...")
             print(f"  - AAGUID: {aaguid}")
-            print(f"  - Authenticator model: {authenticator_model}")
-            print(f"  - Is resident key: {is_resident_key}")
             
         except Exception as e:
             print(f"Error checking for existing key: {e}")
@@ -676,62 +544,30 @@ def webauthn_register_complete():
             print(f"Register Complete: Credential ID already exists, skipping insertion")
         else:
             try:
-                # Check if the username column exists
-                cursor.execute("PRAGMA table_info(security_keys)")
-                columns = [col[1] for col in cursor.fetchall()]
-                
-                # Generate attestation hash if not already done
-                if 'attestation_hash' not in locals():
-                    attestation_hash = hashlib.sha256(attestation_object_b64.encode()).hexdigest()
-                    combined_hash = hashlib.sha256((attestation_object_b64 + client_data_json_b64).encode()).hexdigest()
-                
                 # Prepare insertion with all available columns
                 insert_columns = ["credential_id", "user_id", "public_key", "created_at"]
                 insert_values = [normalized_credential_id, user_id, public_key, "datetime('now')"]
                 
-                # Add username if column exists
-                if 'username' in columns:
-                    insert_columns.append("username")
-                    insert_values.append(initial_username)
+                # Add username
+                insert_columns.append("username")
+                insert_values.append(initial_username)
                 
-                # Add attestation_hash if column exists
-                if 'attestation_hash' in columns:
-                    insert_columns.append("attestation_hash")
-                    insert_values.append(attestation_hash)
+                # Add attestation_hash
+                insert_columns.append("attestation_hash")
+                insert_values.append(attestation_hash)
                 
-                # Add combined_hash as a secondary attestation hash if column exists
-                if 'combined_hash' in columns:
-                    insert_columns.append("combined_hash")
-                    insert_values.append(combined_hash)
+                # Add combined_hash
+                insert_columns.append("combined_hash")
+                insert_values.append(combined_hash)
                 
-                # Add AAGUID if we extracted it and column exists
-                if aaguid and 'aaguid' in columns:
+                # Add AAGUID if we extracted it
+                if aaguid:
                     insert_columns.append("aaguid")
                     insert_values.append(aaguid)
                 
-                # Add raw_id if column exists
-                if 'raw_id' in columns:
-                    insert_columns.append("raw_id")
-                    insert_values.append(raw_id)
-                    
-                # Add authenticator_model if we identified it and column exists
-                if authenticator_model and 'authenticator_model' in columns:
-                    insert_columns.append("authenticator_model")
-                    insert_values.append(authenticator_model)
-                    
-                # Add is_resident_key if column exists
-                if 'is_resident_key' in columns:
-                    insert_columns.append("is_resident_key")
-                    insert_values.append(1 if is_resident_key else 0)
-                    
-                # Add browser fingerprint and registration time if columns exist
-                if 'browser_fingerprint' in columns and 'browser_fingerprint' in session:
-                    insert_columns.append("browser_fingerprint")
-                    insert_values.append(session['browser_fingerprint'])
-                    
-                if 'registration_time' in columns and 'registration_time' in session:
-                    insert_columns.append("registration_time")
-                    insert_values.append(session['registration_time'])
+                # Add is_resident_key - always true since we're requiring it
+                insert_columns.append("is_resident_key")
+                insert_values.append(1)
                 
                 # Build and execute the dynamic INSERT query
                 columns_str = ", ".join(insert_columns)
@@ -777,48 +613,6 @@ def webauthn_login_options():
     try:
         print("\n⭐ WEBAUTHN LOGIN OPTIONS ⭐")
         
-        # Get all credentials from the database
-        print(f"Login Options: Using database: {DB_PATH}")
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get all credentials
-        cursor.execute("SELECT credential_id, user_id, is_resident_key FROM security_keys")
-        rows = cursor.fetchall()
-        
-        credentials = []
-        has_resident_keys = False
-        
-        for row in rows:
-            credential_id = row[0]
-            user_id = row[1]
-            is_resident_key = row[2] if len(row) > 2 else False
-            
-            if is_resident_key:
-                has_resident_keys = True
-            
-            # Only include valid credential IDs
-            try:
-                # Check that we can decode the credential ID
-                credential_id_bytes = base64url_to_bytes(credential_id)
-                credentials.append({
-                    "id": credential_id,
-                    "type": "public-key",
-                    "transports": ["usb", "ble", "nfc", "internal"]
-                })
-                print(f"Login Options: Added credential ID: {credential_id[:20]}... for user: {user_id}")
-            except Exception as e:
-                print(f"Login Options: Skipping invalid credential ID: {e}")
-        
-        conn.close()
-        
-        if not credentials and not has_resident_keys:
-            print("Login Options: No credentials found in database")
-            return jsonify({"error": "No registered credentials found"}), 400
-            
-        print(f"Login Options: Found {len(credentials)} credential(s)")
-        
         # Generate a challenge
         challenge = generate_challenge()
         # Remove any padding for storage in the session
@@ -830,7 +624,7 @@ def webauthn_login_options():
         host = request.host
         hostname = host.split(':')[0]  # Remove port if present
         
-        # Create login options
+        # Create login options - for resident keys, don't specify allowCredentials
         options = {
             "challenge": challenge,
             "timeout": 60000,  # 1 minute
@@ -838,15 +632,7 @@ def webauthn_login_options():
             "userVerification": "preferred"
         }
         
-        # If we have resident keys, we can allow the authenticator to use them
-        # without specifying allowCredentials
-        if has_resident_keys and REGISTRATION_LIMITS['use_resident_key']:
-            print("Login Options: Using resident key mode (no allowCredentials)")
-        else:
-            # Otherwise, provide the list of credentials
-            options["allowCredentials"] = credentials
-            print("Login Options: Using regular mode with allowCredentials list")
-        
+        print("Login Options: Using resident key mode (no allowCredentials)")
         print("Login Options: Returning options...")
         return jsonify(options), 200
         
@@ -885,7 +671,7 @@ def webauthn_login_complete():
         
         # Try both normalized and original credential ID for maximum compatibility
         cursor.execute(
-            "SELECT user_id, public_key, credential_id, username, attestation_hash, authenticator_model, is_resident_key FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
+            "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
             (normalized_credential_id, credential_id)
         )
         
@@ -896,14 +682,6 @@ def webauthn_login_complete():
         if not result:
             print(f"Login Error: Credential ID not found directly: {credential_id[:20]}...")
             
-            # Extract authenticator data for identification
-            authenticator_data = data['response'].get('authenticatorData', '')
-            client_data_json = data['response'].get('clientDataJSON', '')
-            
-            # Generate hashes for matching
-            auth_data_hash = hashlib.sha256(authenticator_data.encode()).hexdigest()
-            combined_auth_hash = hashlib.sha256((authenticator_data + client_data_json).encode()).hexdigest()
-            
             # Check if we have user_id in the assertion response (for resident keys)
             user_handle = data.get('response', {}).get('userHandle')
             
@@ -911,7 +689,7 @@ def webauthn_login_complete():
                 print(f"Login Complete: Found user handle in assertion: {user_handle}")
                 # Try to find the user by user_id
                 cursor.execute(
-                    "SELECT user_id, public_key, credential_id, username, attestation_hash, authenticator_model, is_resident_key FROM security_keys WHERE user_id = ? AND is_resident_key = 1", 
+                    "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE user_id = ?", 
                     (user_handle,)
                 )
                 result = cursor.fetchone()
@@ -919,45 +697,8 @@ def webauthn_login_complete():
                 if result:
                     print(f"Login Complete: Found user by user handle")
             
-            # If still not found, try to identify the authenticator model
             if not result:
-                try:
-                    # Try to extract model info from authenticator data
-                    auth_bytes = base64url_to_bytes(authenticator_data)
-                    auth_str = auth_bytes.decode('utf-8', errors='ignore')
-                    
-                    # Check for common security key identifiers
-                    authenticator_model = None
-                    if any(identifier in auth_str for identifier in ['FIDO', 'U2F', 'Security Key']):
-                        # Try to determine specific model types
-                        if any(model in auth_str for model in ['5Ci', '5 Ci']):
-                            authenticator_model = "Multi-connector Security Key"
-                        elif any(model in auth_str for model in ['5C', '5 C']):
-                            authenticator_model = "USB-C Security Key"
-                        elif any(model in auth_str for model in ['5NFC', '5 NFC', 'NFC']):
-                            authenticator_model = "NFC-enabled Security Key"
-                        elif any(model in auth_str for model in ['Bio', 'Biometric']):
-                            authenticator_model = "Biometric Security Key"
-                        else:
-                            authenticator_model = "Security Key"
-                        
-                        print(f"Login Complete: Detected authenticator model: {authenticator_model}")
-                        
-                        # If this is a multi-connector security key, try to find any registered one
-                        if authenticator_model == "Multi-connector Security Key" and REGISTRATION_LIMITS['use_resident_key']:
-                            cursor.execute(
-                                "SELECT user_id, public_key, credential_id, username, attestation_hash, authenticator_model, is_resident_key FROM security_keys WHERE authenticator_model = ? AND is_resident_key = 1 LIMIT 1", 
-                                (authenticator_model,)
-                            )
-                            result = cursor.fetchone()
-                            
-                            if result:
-                                print(f"Login Complete: Found matching security key registration")
-                except Exception as e:
-                    print(f"Error during authenticator model detection: {e}")
-            
-            if not result:
-                print(f"Login Error: Could not find matching credential or authenticator")
+                print(f"Login Error: Could not find matching credential")
                 conn.close()
                 return jsonify({'error': 'Credential not recognized. Please register first.'}), 401
         
@@ -966,9 +707,7 @@ def webauthn_login_complete():
         public_key_json = result[1]
         stored_credential_id = result[2]
         username = result[3]
-        attestation_hash = result[4] if len(result) > 4 else None
-        authenticator_model = result[5] if len(result) > 5 else None
-        is_resident_key = result[6] if len(result) > 6 else False
+        is_resident_key = result[4] if len(result) > 4 else True  # Default to true for resident keys
         
         if not user_id:
             print(f"Login Error: Invalid user ID for credential")
@@ -976,66 +715,7 @@ def webauthn_login_complete():
             return jsonify({'error': 'Invalid user credential. Please register again.'}), 401
             
         print(f"Login Complete: Found user ID: {user_id} with username: {username or 'Unknown'}")
-        print(f"Login Complete: Authenticator model: {authenticator_model or 'Unknown'}")
         print(f"Login Complete: Is resident key: {is_resident_key}")
-        
-        # If we have authenticator data but no attestation hash, try to update it
-        if not attestation_hash and data['response'].get('authenticatorData'):
-            try:
-                # Check if attestation_hash column exists
-                cursor.execute("PRAGMA table_info(security_keys)")
-                columns = [col[1] for col in cursor.fetchall()]
-                
-                if 'attestation_hash' in columns:
-                    # Generate a hash from the authenticator data
-                    auth_data_hash = hashlib.sha256(data['response']['authenticatorData'].encode()).hexdigest()
-                    print(f"Updating attestation hash for existing credential: {auth_data_hash[:20]}...")
-                    
-                    # Update the record with the hash
-                    cursor.execute(
-                        "UPDATE security_keys SET attestation_hash = ? WHERE credential_id = ?",
-                        (auth_data_hash, stored_credential_id)
-                    )
-                    conn.commit()
-                    
-                # Try to detect and update authenticator model if not already set
-                if 'authenticator_model' in columns and not authenticator_model:
-                    # Try to detect from the authenticator data
-                    auth_bytes = base64url_to_bytes(data['response']['authenticatorData'])
-                    auth_str = auth_bytes.decode('utf-8', errors='ignore')
-                    
-                    # Check for common security key identifiers
-                    if any(identifier in auth_str for identifier in ['FIDO', 'U2F', 'Security Key']):
-                        # Try to determine specific model types
-                        if any(model in auth_str for model in ['5Ci', '5 Ci']):
-                            detected_model = "Multi-connector Security Key"
-                        elif any(model in auth_str for model in ['5C', '5 C']):
-                            detected_model = "USB-C Security Key"
-                        elif any(model in auth_str for model in ['5NFC', '5 NFC', 'NFC']):
-                            detected_model = "NFC-enabled Security Key"
-                        elif any(model in auth_str for model in ['Bio', 'Biometric']):
-                            detected_model = "Biometric Security Key"
-                        else:
-                            detected_model = "Security Key"
-                            
-                        print(f"Detected and updating authenticator model: {detected_model}")
-                        cursor.execute(
-                            "UPDATE security_keys SET authenticator_model = ? WHERE credential_id = ?",
-                            (detected_model, stored_credential_id)
-                        )
-                        conn.commit()
-                
-                # Update is_resident_key if needed
-                if 'is_resident_key' in columns and data.get('response', {}).get('userHandle'):
-                    print(f"Updating credential to mark as resident key")
-                    cursor.execute(
-                        "UPDATE security_keys SET is_resident_key = 1 WHERE credential_id = ?",
-                        (stored_credential_id,)
-                    )
-                    conn.commit()
-            except Exception as e:
-                print(f"Warning: Could not update credential metadata: {e}")
-                # Continue with login regardless
         
         # For this simplification, we'll just verify that we found a user
         # In a real implementation, you would verify the signature against the stored public key
@@ -1343,7 +1023,7 @@ def force_cleanup_credentials():
             # Drop and recreate the security_keys table with all columns
             cursor.execute("DROP TABLE IF EXISTS security_keys")
             
-            # Create the security_keys table with all necessary columns
+            # Create the security_keys table with only essential columns
             cursor.execute("""
             CREATE TABLE security_keys (
                 credential_id TEXT PRIMARY KEY,
@@ -1352,13 +1032,9 @@ def force_cleanup_credentials():
                 public_key TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 attestation_hash TEXT,
-                aaguid TEXT,
                 combined_hash TEXT,
-                raw_id TEXT,
-                authenticator_model TEXT,
-                browser_fingerprint TEXT,
-                registration_time TIMESTAMP,
-                is_resident_key BOOLEAN DEFAULT 0
+                aaguid TEXT,
+                is_resident_key BOOLEAN DEFAULT 1
             )
             """)
             
