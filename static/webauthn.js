@@ -1,45 +1,28 @@
 /**
- * WebAuthn Client Handler v1.4.3
- * Enhanced with iOS compatibility & routing fixes
+ * WebAuthn Client Handler v1.5.0
+ * Optimized for cross-platform FIDO2 security key authentication
  */
 const webAuthn = {
-    version: '1.4.3',
+    version: '1.5.0',
     
-    // Determine correct API endpoint path
+    // Simplified endpoint path function
     getEndpointPath: function(endpoint) {
-        this.log(`Finding path for endpoint: ${endpoint}`);
-        
-        // For maximum compatibility, try both static and root paths
-        // Start with the simplest approach - direct root path
-        const rootPath = `/${endpoint}`;
-        
-        // Then try '/static/' prefix which is needed in some environments
-        const staticPath = `/static/${endpoint}`;
-        
-        // Testing code - try to fetch options from both paths to see which one works
-        this.log(`Using root path: ${rootPath} (primary)`);
-        
-        // Show what we're choosing
-        if (window.location.href.includes('render-authentication-project.onrender.com')) {
-            this.log('Production environment detected');
-        } else {
-            this.log('Development environment detected');
-        }
-        
-        // Always return root path first, we have alias routes set up
-        return rootPath;
+        // Always use root path for simplicity and consistency
+        return `/${endpoint}`;
     },
     
+    // Streamlined logging - only logs in non-production or when debug=true is in URL
     log: function(message) {
-        console.log(`WebAuthn [${this.version}]: ${message}`);
+        // Only log if in development or debug mode
+        if (!window.location.href.includes('render-authentication-project.onrender.com') || 
+            window.location.search.includes('debug=true')) {
+            console.log(`WebAuthn [${this.version}]: ${message}`);
+        }
     },
     
-    // Detect iOS
+    // Check if device is iOS (needed for special handling)
     isIOS: function() {
-        const ua = window.navigator.userAgent;
-        const isIOS = /iPad|iPhone|iPod/.test(ua) || 
-                     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        return isIOS;
+        return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     },
     
     // Base64URL to ArrayBuffer with iOS safety checks
@@ -581,7 +564,11 @@ const webAuthn = {
             }
             return response.json();
         })
-        .then(messages => {
+        .then(data => {
+            // Extract messages array from the response
+            const messages = data.messages || [];
+            this.log(`Retrieved ${messages.length} messages from server`);
+            
             // Handle both message container types
             let messageContainer = document.getElementById('message-list');
             if (!messageContainer) {
@@ -610,8 +597,8 @@ const webAuthn = {
                 const messageElem = document.createElement('div');
                 messageElem.className = messageContainer.id === 'messages' ? 'message' : 'message-item';
                 messageElem.innerHTML = `
-                    <strong>${msg.user_id}</strong>: ${msg.message} 
-                    <span class="${messageContainer.id === 'messages' ? 'time' : 'timestamp'}">${msg.timestamp}</span>
+                    <strong>${msg.user || 'Anonymous'}</strong>: ${msg.message} 
+                    <span class="${messageContainer.id === 'messages' ? 'time' : 'timestamp'}">${msg.time || ''}</span>
                 `;
                 messageContainer.appendChild(messageElem);
             });
