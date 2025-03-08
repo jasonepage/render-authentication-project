@@ -98,7 +98,9 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS security_keys (
                 credential_id TEXT PRIMARY KEY,
-                public_key TEXT
+                user_id TEXT,
+                public_key TEXT,
+                created_at TEXT
             )
         ''')
         
@@ -789,13 +791,24 @@ def webauthn_register_complete():
             conn = sqlite3.connect('webauthn.db')
             cursor = conn.cursor()
             
+            # Get user_id from session or generate a new one if not available
+            user_id = session.get('user_id_for_registration')
+            if not user_id:
+                user_id = data.get('id') or f"user-{secrets.token_urlsafe(8)}"
+                print(f"Generated new user_id: {user_id}")
+            
+            print(f"Using user_id: {user_id}")
+            
             # Store the credential in the database
+            credential_id_b64 = bytes_to_base64url(credential_id)
+            print(f"Credential ID: {credential_id_b64}")
+            
             cursor.execute(
                 "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
-                (bytes_to_base64url(credential_id), data.get('id'), json.dumps(public_key), datetime.datetime.now().isoformat())
+                (credential_id_b64, user_id, json.dumps(public_key), datetime.datetime.now().isoformat())
             )
             conn.commit()
-            print(f"✅ Credential stored in database for user {data.get('id')}")
+            print(f"✅ Credential stored in database for user {user_id}")
         except Exception as e:
             print(f"⛔ ERROR storing credential: {str(e)}")
             print(traceback.format_exc())
