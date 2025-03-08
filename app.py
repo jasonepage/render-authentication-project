@@ -1,3 +1,20 @@
+# Author: Jason Page
+# Created: March 2024
+# Version: 1.0
+
+# Key Features:
+# - FIDO2 WebAuthn authentication
+# - Real-time chat messaging
+# - SQLite database storage
+# - Debug monitoring dashboard
+
+# Dependencies:
+# - Flask: Web framework
+# - cryptography: For encryption and hashing
+# - SQLite3: Database
+# - Flask-CORS: Cross-origin resource sharing
+
+
 from flask import Flask, request, jsonify, session, send_from_directory
 import sqlite3
 import json
@@ -31,16 +48,30 @@ CORS(app,
 )
 
 def init_db():
+    """
+    Initialize SQLite database with required tables.
+    
+    Creates two tables:
+    1. security_keys: Stores FIDO2 security key registration data
+       - credential_id (TEXT): Unique identifier for each security key
+       - public_key (TEXT): Public key used for verification
+       
+    2. messages: Stores chat messages
+       - id (INTEGER): Auto-incrementing message ID
+       - user_id (TEXT): ID of the user who sent the message
+       - message (TEXT): Content of the message
+       - timestamp (DATETIME): When the message was sent
+    """
     try:
         # Use a data directory that's guaranteed to be writable on Render
-        db_path = os.path.join(os.environ.get('HOME', ''), 'yubikeys.db')
+        db_path = os.path.join(os.environ.get('HOME', ''), 'webauthn.db')
         os.environ['DATABASE_PATH'] = db_path
         print(f"Using database at: {db_path}")
         
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         c.execute('''
-            CREATE TABLE IF NOT EXISTS yubikeys (
+            CREATE TABLE IF NOT EXISTS security_keys (
                 credential_id TEXT PRIMARY KEY,
                 public_key TEXT
             )
@@ -64,8 +95,18 @@ init_db()
 
 @app.route('/')
 def index():
+    """
+    Health check endpoint.
+    
+    Returns:
+        JSON: Status information about the service
+        {
+            "status": "healthy",
+            "service": "FIDO2 Authentication System"
+        }
+    """
     print("Index endpoint accessed")
-    return jsonify({"status": "healthy", "service": "YubiKey Authentication System"}), 200
+    return jsonify({"status": "healthy", "service": "FIDO2 Authentication System"}), 200
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -81,17 +122,17 @@ def register():
         print("❌ Registration failed: Missing credential_id or public_key")
         return jsonify({"error": "Missing credential_id or public_key"}), 400
 
-    db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
     print(f"Using database for registration: {db_path}")
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
     try:
-        c.execute("INSERT INTO yubikeys (credential_id, public_key) VALUES (?, ?)",
+        c.execute("INSERT INTO security_keys (credential_id, public_key) VALUES (?, ?)",
                   (credential_id, public_key_json))
         conn.commit()
-        print(f"✅ YubiKey credential registered successfully! ID: {credential_id[:10]}...")
-        return jsonify({"message": "YubiKey registered."}), 200
+        print(f"✅ Security key registered successfully! ID: {credential_id[:10]}...")
+        return jsonify({"message": "Security key registered."}), 200
     except sqlite3.IntegrityError:
         print(f"❌ Registration failed: Credential already exists: {credential_id[:10]}...")
         return jsonify({"error": "Credential already exists."}), 400
@@ -125,10 +166,10 @@ def verify():
 
     # Get public key
     try:
-        db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+        db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
-        c.execute("SELECT public_key FROM yubikeys WHERE credential_id = ?", (credential_id,))
+        c.execute("SELECT public_key FROM security_keys WHERE credential_id = ?", (credential_id,))
         row = c.fetchone()
         conn.close()
 
@@ -179,7 +220,7 @@ def verify():
                     # Create session for the user
                     session['authenticated'] = True
                     session['user_id'] = credential_id[:10]  # Use credential ID prefix as user identifier
-                    return jsonify({"message": "YubiKey verified successfully!"}), 200
+                    return jsonify({"message": "Security key verified successfully!"}), 200
             except Exception as e:
                 last_error = str(e)
                 print(f"❌ Verification method {method_num} failed: {last_error}")
@@ -254,14 +295,14 @@ def verify_with_raw_components(public_key, signature, auth_data, client_data_jso
 @app.route('/get_credential', methods=['GET'])
 def get_credential():
     print("\n=== GET CREDENTIAL REQUEST ===")
-    db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
     print(f"Getting credential from database: {db_path}")
     
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
     try:
-        c.execute("SELECT credential_id FROM yubikeys LIMIT 1")
+        c.execute("SELECT credential_id FROM security_keys LIMIT 1")
         row = c.fetchone()
         
         if row:
@@ -293,10 +334,10 @@ def debug_signature():
         client_data_json = bytes.fromhex(client_data_json_hex)
         
         # Get the public key from the database
-        db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+        db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
-        c.execute("SELECT public_key FROM yubikeys WHERE credential_id = ?", (credential_id,))
+        c.execute("SELECT public_key FROM security_keys WHERE credential_id = ?", (credential_id,))
         row = c.fetchone()
         conn.close()
         
@@ -373,7 +414,7 @@ def send_message():
     user_id = session.get('user_id')
     print(f"User {user_id} sending message: {message[:30]}...")
     
-    db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
@@ -429,7 +470,7 @@ def get_messages():
     #     print("❌ Message retrieval rejected: User not authenticated")
     #     return jsonify({"error": "Authentication required"}), 401
     
-    db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
@@ -448,7 +489,7 @@ def get_messages():
 def debug_db():
     """Debug endpoint to test database access"""
     try:
-        db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+        db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
         db_dir = os.path.dirname(db_path) or '.'
         
         # Test if directory exists and is writable
@@ -481,7 +522,7 @@ def get_credentials():
     print("\n=== GET ALL CREDENTIALS REQUEST ===")
     
     # Use the same database path as other functions
-    db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
     print(f"Getting all credentials from database: {db_path}")
     
     try:
@@ -490,7 +531,7 @@ def get_credentials():
         cursor = conn.cursor()
         
         # Get all credential IDs
-        cursor.execute("SELECT credential_id FROM yubikeys")
+        cursor.execute("SELECT credential_id FROM security_keys")
         results = cursor.fetchall()
         conn.close()
         
@@ -560,7 +601,7 @@ def webauthn_register_options():
     return jsonify({
         "challenge": challenge,
         "rp": {
-            "name": "YubiKey Chat System",
+            "name": "FIDO2 Chat System",
             "id": "render-authentication-project.onrender.com"
         },
         "user": {
@@ -623,7 +664,7 @@ def webauthn_register_complete():
         # In a real implementation, you would properly parse the CBOR attestation object
         
         # Connect to the database
-        db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+        db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         
@@ -639,7 +680,7 @@ def webauthn_register_complete():
         
         # Store in the database
         try:
-            c.execute("INSERT INTO yubikeys (credential_id, public_key) VALUES (?, ?)",
+            c.execute("INSERT INTO security_keys (credential_id, public_key) VALUES (?, ?)",
                   (credential_id, json.dumps(public_key)))
             conn.commit()
             print(f"✅ WebAuthn credential registered successfully! ID: {credential_id[:10]}...")
@@ -677,12 +718,12 @@ def webauthn_login_options():
     print(f"Created challenge: {challenge[:10]}...")
     
     # Get all credentials from the database
-    db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+    db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
     try:
-        c.execute("SELECT credential_id FROM yubikeys")
+        c.execute("SELECT credential_id FROM security_keys")
         credentials = c.fetchall()
         
         # Format for WebAuthn
@@ -757,11 +798,11 @@ def webauthn_login_complete():
         # For this example, we'll assume it's valid if we can find the credential
         
         # Get the credential from the database
-        db_path = os.environ.get('DATABASE_PATH', 'yubikeys.db')
+        db_path = os.environ.get('DATABASE_PATH', 'webauthn.db')
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
         
-        c.execute("SELECT credential_id FROM yubikeys WHERE credential_id = ?", (credential_id,))
+        c.execute("SELECT credential_id FROM security_keys WHERE credential_id = ?", (credential_id,))
         result = c.fetchone()
         conn.close()
         
@@ -843,22 +884,44 @@ def serve_chat_js():
 
 @app.route('/debug')
 def debug_dashboard():
-    """Simple debug dashboard showing basic system status"""
+    """
+    Debug dashboard showing system status and statistics.
+    
+    Provides information about:
+    - System status and timestamp
+    - Current environment
+    - Database location
+    - Number of registered security keys
+    - Total message count
+    - Number of unique users
+    
+    Returns:
+        JSON: Debug information and statistics
+        {
+            "status": "healthy",
+            "timestamp": "ISO-format timestamp",
+            "environment": "production/development",
+            "database_path": "path to database",
+            "registered_keys": number,
+            "total_messages": number,
+            "unique_users": number
+        }
+    """
     try:
         # Basic system info
         debug_info = {
             "status": "healthy",
             "timestamp": datetime.datetime.now().isoformat(),
             "environment": app.env,
-            "database_path": os.environ.get('DATABASE_PATH', 'yubikeys.db')
+            "database_path": os.environ.get('DATABASE_PATH', 'webauthn.db')
         }
         
         # Database stats
-        conn = sqlite3.connect(os.environ.get('DATABASE_PATH', 'yubikeys.db'))
+        conn = sqlite3.connect(os.environ.get('DATABASE_PATH', 'webauthn.db'))
         c = conn.cursor()
         
-        c.execute("SELECT COUNT(*) FROM yubikeys")
-        debug_info["registered_yubikeys"] = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM security_keys")
+        debug_info["registered_keys"] = c.fetchone()[0]
         
         c.execute("SELECT COUNT(*) FROM messages")
         debug_info["total_messages"] = c.fetchone()[0]

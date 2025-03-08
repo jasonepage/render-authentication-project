@@ -1,4 +1,4 @@
-// WebAuthn API handling for YubiKey communication
+// WebAuthn API handling for key communication
 const webAuthn = {
     // Server URL
     SERVER_URL: window.location.origin,
@@ -36,7 +36,7 @@ const webAuthn = {
         return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
     },
     
-    // Show modal during YubiKey operations
+    // Show modal during key operations
     showModal(message) {
         document.getElementById('modal-message').textContent = message;
         document.getElementById('modal').classList.remove('hidden');
@@ -47,10 +47,10 @@ const webAuthn = {
         document.getElementById('modal').classList.add('hidden');
     },
     
-    // Register a new YubiKey
-    async registerYubiKey() {
+    // Register a new key
+    async registerKey() {
         try {
-            this.showModal('Touch your YubiKey to register...');
+            this.showModal('Touch your key to register...');
             
             // 1. Get registration options from the server
             const optionsResponse = await fetch(`${this.SERVER_URL}/register_options`, {
@@ -70,7 +70,7 @@ const webAuthn = {
             const publicKeyOptions = {
                 challenge: this.base64urlToArrayBuffer(optionsJson.challenge),
                 rp: {
-                    name: 'YubiKey Chat System',
+                    name: 'Key Chat System',
                     id: 'render-authentication-project.onrender.com'
                 },
                 user: {
@@ -114,7 +114,7 @@ const webAuthn = {
             });
             
             if (!verificationResponse.ok) {
-                throw new Error('Failed to register YubiKey');
+                throw new Error('Failed to register key');
             }
             
             const result = await verificationResponse.json();
@@ -122,7 +122,7 @@ const webAuthn = {
             this.hideModal();
             
             // Auto-login after successful registration
-            await this.loginWithYubiKey();
+            await this.loginWithiKey();
             
             return result;
         } catch (error) {
@@ -133,10 +133,10 @@ const webAuthn = {
         }
     },
     
-    // Login with YubiKey
-    async loginWithYubiKey() {
+    // Login with key
+    async loginWithKey() {
         try {
-            this.showModal('Touch your YubiKey to login...');
+            this.showModal('Touch your key to login...');
             
             // 1. Get authentication options from the server
             const optionsResponse = await fetch(`${this.SERVER_URL}/login_options`, {
@@ -195,7 +195,7 @@ const webAuthn = {
             });
             
             if (!verificationResponse.ok) {
-                throw new Error('Failed to login with YubiKey');
+                throw new Error('Failed to login with key');
             }
             
             const result = await verificationResponse.json();
@@ -298,8 +298,8 @@ const webAuthn = {
         }
         
         // Set up event listeners
-        document.getElementById('register-button').addEventListener('click', () => this.registerYubiKey());
-        document.getElementById('login-button').addEventListener('click', () => this.loginWithYubiKey());
+        document.getElementById('register-button').addEventListener('click', () => this.registerKey());
+        document.getElementById('login-button').addEventListener('click', () => this.loginWithKey());
         document.getElementById('logout-button').addEventListener('click', () => this.logout());
         
         // Check if user is already authenticated
