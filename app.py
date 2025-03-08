@@ -644,8 +644,9 @@ def webauthn_register_options():
         challenge = generate_challenge()
         print(f"Generated challenge: {challenge}")
         
-        # Store the challenge in the session
+        # Store the challenge and user_id in the session
         session['challenge'] = challenge
+        session['user_id_for_registration'] = user_id
         print(f"Session after challenge storage: {dict(session)}")
         
         # Create the registration options
@@ -805,6 +806,11 @@ def webauthn_register_complete():
         
         # Set session variables
         session['authenticated'] = True
+        # Use the user_id stored in the session during registration options
+        user_id = session.get('user_id_for_registration')
+        if not user_id:
+            # Fallback to credential ID if not found
+            user_id = data.get('id')
         session['user_id'] = user_id
         print(f"Session after registration: {dict(session)}")
         
