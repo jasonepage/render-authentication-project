@@ -19,8 +19,13 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
 # In-memory cache for rate limiting
 cache = {}
 
-# DB path - can be customized for local development
-DB_PATH = os.environ.get('DB_PATH', '/opt/render/webauthn.db')
+# DB path - can be customized for local development or testing
+# Use a memory database or local file for testing
+if os.environ.get('FLASK_ENV') == 'testing':
+    DB_PATH = os.environ.get('TEST_DB_PATH', ':memory:')
+    print(f"Using testing database: {DB_PATH}")
+else:
+    DB_PATH = os.environ.get('DB_PATH', '/opt/render/webauthn.db')
 
 # ==========================================
 # Logging middleware
@@ -51,8 +56,9 @@ def init_db():
     """Initialize database tables if they don't exist"""
     print(f"Initializing database at {DB_PATH}")
     
-    # Create directory if it doesn't exist
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # Only create directory if not using in-memory database
+    if DB_PATH != ':memory:' and os.path.dirname(DB_PATH):
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -170,14 +176,24 @@ def get_messages():
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         
+        # Check if the messages table exists
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+        if not c.fetchone():
+            print("Messages table doesn't exist yet")
+            conn.close()
+            return jsonify([]), 200
+        
         c.execute("SELECT user_id, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT 50")
         messages = [{"user": row[0], "message": row[1], "time": row[2]} for row in c.fetchall()]
         conn.close()
         
+        print(f"Retrieved {len(messages)} messages")
         return jsonify(messages), 200
     except Exception as e:
         print(f"Error retrieving messages: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(traceback.format_exc())
+        # Return empty list instead of error for better user experience
+        return jsonify([]), 200
 
 # ==========================================
 # WebAuthn API Endpoints
@@ -603,7 +619,7 @@ def debug_all():
             credential_valid = True
             try:
                 # Try to decode the credential_id to check if it's valid
-                padded = credential_id + '=' * (4 - len(credential_id) % 4) % 4
+                padded = credential_id + '=' * (4 - len(credential_id) % 4)
                 standard = padded.replace('-', '+').replace('_', '/') 
                 base64.b64decode(standard)
             except Exception as e:

@@ -1,12 +1,34 @@
-venv/
+# Test and coverage artifacts
+htmlcov/
+.coverage
+test_data/
+server.log
+
+# Python bytecode
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.pyw
-*.pyz
+.Python
+
+# Environment
+venv/
+env/
+.env
+.venv
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
 
 .pytest_cache/
-.DS_Store
-.env
 
+*.db
+
+.github
