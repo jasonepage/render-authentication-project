@@ -240,4 +240,42 @@ footer {
     font-weight: bold;
     color: #4CAF50;
     cursor: help;
+}
+
+/* Credential Help Styles */
+.credential-help {
+    margin: 10px 0;
+    padding: 12px;
+    background-color: #e3f2fd;
+    border-radius: 5px;
+    border-left: 4px solid #2196f3;
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    line-height: 1.4;
+    transition: opacity 0.3s ease-in-out;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.help-icon {
+    font-size: 24px;
+    margin-right: 10px;
+    color: #2196f3;
+}
+
+.help-message {
+    flex: 1;
+    color: #333;
+}
+
+/* Animation for credential help */
+@keyframes fadeInOut {
+    0% { opacity: 0; transform: translateY(-10px); }
+    10% { opacity: 1; transform: translateY(0); }
+    90% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-10px); }
+}
+
+.credential-help {
+    animation: fadeInOut 12s ease-in-out;
 } 

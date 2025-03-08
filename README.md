@@ -11,7 +11,7 @@ A secure chat application that implements FIDO2/WebAuthn authentication for pass
 ## Technology Stack
 
 - **Backend**: Flask (Python)
-- **Frontend**: Vanilla JavaScript, HTML, CSS
+- **Frontend**: JavaScript, HTML, CSS, Render 
 - **Authentication**: FIDO2/WebAuthn
 - **Database**: SQLite
 
@@ -139,16 +139,7 @@ This application is ready to deploy on Render.com:
      - `SECRET_KEY`: a secure random string
      - `DB_PATH`: database path (usually `/opt/render/webauthn.db`)
 
-## License
 
-[Specify your license here]
+## Authors
 
-## Author
-
-[Your name and contact information]
-
-## Acknowledgments
-
-- FIDO Alliance for the WebAuthn specification
-- The Flask team
-- Render.com for hosting
+Chris Becker, Jake McDowell, Jason Page

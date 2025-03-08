@@ -343,14 +343,7 @@ const webAuthn = {
             return navigator.credentials.create({
                 publicKey: options
             }).catch(err => {
-                this.logError('Credential creation failed', err);
-                console.error('ERROR DETAILS:', {
-                    name: err.name,
-                    message: err.message,
-                    code: err.code,
-                    stack: err.stack
-                });
-                throw err;
+                this.handleRegistrationError(err);
             });
         })
         .then(credential => {
@@ -415,9 +408,7 @@ const webAuthn = {
             alert('Security key registered successfully!');
         })
         .catch(error => {
-            this.log(`Registration error: ${error.message}`);
-            this.hideModal();
-            alert(`Registration failed: ${error.message}`);
+            this.handleRegistrationError(error);
         });
         
         return false; // Prevent form submission
@@ -845,6 +836,103 @@ const webAuthn = {
             this.updateUI(false);
             return { authenticated: false };
         });
+    },
+    
+    // Add a new method for detecting when a credential is already registered
+    showCredentialHelp: function(message) {
+        this.log('Showing credential help:', message);
+        
+        // Create or update a help element at the top of the auth section
+        const authSection = document.getElementById('auth-status');
+        let helpElement = document.getElementById('credential-help');
+        
+        if (!helpElement) {
+            helpElement = document.createElement('div');
+            helpElement.id = 'credential-help';
+            helpElement.className = 'credential-help';
+            
+            // Insert at the top of auth section
+            if (authSection.firstChild) {
+                authSection.insertBefore(helpElement, authSection.firstChild);
+            } else {
+                authSection.appendChild(helpElement);
+            }
+        }
+        
+        // Add explanatory text
+        helpElement.innerHTML = `
+            <div class="help-icon">ℹ️</div>
+            <div class="help-message">${message}</div>
+        `;
+        
+        // Add some basic styling if not already in CSS
+        if (!document.getElementById('credential-help-style')) {
+            const style = document.createElement('style');
+            style.id = 'credential-help-style';
+            style.textContent = `
+                .credential-help {
+                    margin: 10px 0;
+                    padding: 10px;
+                    background-color: #e3f2fd;
+                    border-radius: 5px;
+                    border-left: 4px solid #2196f3;
+                    display: flex;
+                    align-items: center;
+                }
+                .help-icon {
+                    font-size: 24px;
+                    margin-right: 10px;
+                }
+                .help-message {
+                    flex: 1;
+                    font-size: 14px;
+                    line-height: 1.4;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Remove the help message after some time
+        setTimeout(() => {
+            if (helpElement && helpElement.parentNode) {
+                helpElement.parentNode.removeChild(helpElement);
+            }
+        }, 12000); // Show for 12 seconds
+    },
+
+    // Update handleRegistrationError to also show credential help
+    handleRegistrationError: function(error) {
+        this.logError('Registration error:', error);
+        
+        // Check for specific error types that indicate an existing credential
+        const errorMessage = error.message || '';
+        const isExistingCredentialError = 
+            errorMessage.includes('already registered') || 
+            errorMessage.includes('excludeCredentials') ||
+            errorMessage.includes('credential already exists') ||
+            errorMessage.includes('The authenticator is already registered') ||
+            error.name === 'InvalidStateError';
+        
+        if (isExistingCredentialError) {
+            this.log('Detected existing credential - redirecting to login flow');
+            // Show a helpful message to the user
+            this.showMessage('This authenticator is already registered. Proceeding to login...');
+            
+            // Show additional help message
+            this.showCredentialHelp('This security key or device is already registered. We\'ll try to log you in with it instead of creating a new account.');
+            
+            // Short delay before switching to login
+            setTimeout(() => {
+                // Switch to login mode
+                this.login();
+            }, 2000);
+            
+            return;
+        }
+        
+        // Handle other registration errors
+        this.showError(`Registration failed: ${error.message}`);
+        this.hideModal();
     },
     
     // Initialize the application
