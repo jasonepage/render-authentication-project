@@ -688,15 +688,19 @@ def webauthn_register_options():
 @app.route('/register_complete', methods=['POST'])
 def webauthn_register_complete():
     """Complete registration for WebAuthn"""
+    print("\n=== WEBAUTHN REGISTRATION COMPLETION ===")
     data = request.get_json()
+    print(f"Registration: Received data with credential ID: {data.get('id', '')[:15]}...")
     
     try:
         # Skip complex CBOR validation and just store a simplified credential
         user_id = session.get('user_id_for_registration') or secrets.token_urlsafe(8)
+        print(f"Registration: Using user_id: {user_id}")
         
         # Create a simple credential from the raw credential ID
         credential_id = data.get('id')
         if not credential_id:
+            print("Registration: No credential ID found in request")
             return jsonify({'error': 'No credential ID found in request'}), 400
             
         # Create a dummy public key - we won't actually use this for verification in this simplified demo
@@ -710,8 +714,25 @@ def webauthn_register_complete():
         
         # Store in database (hardcoded path that works on Render)
         db_path = '/opt/render/webauthn.db'
+        print(f"Registration: Using database path: {db_path}")
+        
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
+        
+        # First check if this credential ID already exists (same device being registered again)
+        print(f"Registration: Checking if credential already exists: {credential_id[:15]}...")
+        cursor.execute("SELECT credential_id, user_id FROM security_keys WHERE credential_id=?", (credential_id,))
+        existing_cred = cursor.fetchone()
+        
+        if existing_cred:
+            existing_user_id = existing_cred[1]
+            print(f"Registration: This credential already exists for user: {existing_user_id}")
+            
+            # Use this user_id instead of creating a new one
+            user_id = existing_user_id
+            print(f"Registration: Using existing user_id: {user_id}")
+        else:
+            print(f"Registration: No existing credential found, creating new registration")
         
         # Ensure table exists
         cursor.execute('''
@@ -725,20 +746,31 @@ def webauthn_register_complete():
         
         # Store credential
         timestamp = datetime.datetime.now().isoformat()
+        
+        # Use INSERT OR REPLACE to update if exists or insert if not
         cursor.execute(
             "INSERT OR REPLACE INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, ?)",
             (credential_id, user_id, json.dumps(public_key), timestamp)
         )
         conn.commit()
+        
+        # Get all credentials for this user for debugging
+        cursor.execute("SELECT credential_id FROM security_keys WHERE user_id=?", (user_id,))
+        user_creds = cursor.fetchall()
+        print(f"Registration: User {user_id} now has {len(user_creds)} credential(s)")
+        
         conn.close()
         
         # Update session
         session['authenticated'] = True
         session['user_id'] = user_id
+        print(f"Registration: Updated session: {dict(session)}")
         
         return jsonify({'status': 'success', 'userId': user_id})
         
     except Exception as e:
+        print(f"Registration error: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/login_options', methods=['POST'])
@@ -747,22 +779,30 @@ def webauthn_login_options():
     try:
         # Generate a random challenge
         challenge = generate_challenge()
+        print(f"Login: Generated challenge: {challenge}")
         
         # Store in session for verification later
         session['challenge'] = challenge
+        print(f"Login: Updated session: {dict(session)}")
         
-        # Get all credentials from the database
+        # Get all credentials from the database - important to include ALL credentials
+        # so the security key can find its existing registration
         db_path = '/opt/render/webauthn.db'
+        print(f"Login: Using database path: {db_path}")
+        
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Get all credentials
+        # Get all credentials (no filtering)
         cursor.execute("SELECT credential_id, user_id FROM security_keys")
         credentials = [{"id": row[0], "user_id": row[1]} for row in cursor.fetchall()]
         conn.close()
         
+        print(f"Login: Found {len(credentials)} credential(s) in database")
+        
         # If no credentials found, return empty allowCredentials
         if not credentials:
+            print("Login: No credentials found in database")
             return jsonify({
                 "challenge": challenge,
                 "allowCredentials": []
@@ -773,49 +813,92 @@ def webauthn_login_options():
         for cred in credentials:
             allow_credentials.append({
                 "type": "public-key",
-                "id": cred["id"]
+                "id": cred["id"],
+                "transports": ["usb", "nfc", "ble", "internal"]  # Support all transport types
             })
+            print(f"Login: Added credential ID {cred['id'][:10]}... for user {cred['user_id']}")
         
-        # Create options
+        # Create options with proper rpId that matches registration
         options = {
             "challenge": challenge,
             "timeout": 60000,
-            "allowCredentials": allow_credentials
+            "rpId": "render-authentication-project.onrender.com",
+            "allowCredentials": allow_credentials,
+            "userVerification": "discouraged"
         }
         
+        print(f"Login: Returning options with {len(allow_credentials)} credentials")
         return jsonify(options)
         
     except Exception as e:
+        print(f"Login error: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/login_complete', methods=['POST'])
 def webauthn_login_complete():
     """Complete the login process for WebAuthn"""
     try:
+        print("\n=== WEBAUTHN LOGIN COMPLETION ===")
         data = request.get_json()
+        print(f"Login: Received data with credential ID: {data.get('id', '')[:15]}...")
         
         # For simplified demo, we'll just check if the credential exists in our database
         credential_id = data.get('id')
         if not credential_id:
+            print("Login: No credential ID in response")
             return jsonify({'error': 'No credential ID in response'}), 400
         
         # Get the user from the database
         db_path = '/opt/render/webauthn.db'
+        print(f"Login: Using database path: {db_path}")
+        
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        print(f"Login: Looking up credential ID: {credential_id[:15]}...")
+        cursor.execute("SELECT credential_id, user_id FROM security_keys")
+        all_creds = cursor.fetchall()
+        print(f"Login: Found {len(all_creds)} total credentials in database")
+        for cred in all_creds:
+            print(f"Login: Database has: {cred[0][:15]}... for user {cred[1]}")
+            
         cursor.execute("SELECT user_id FROM security_keys WHERE credential_id=?", (credential_id,))
         row = cursor.fetchone()
-        conn.close()
         
-        if not row:
-            return jsonify({'error': 'Unknown credential'}), 400
+        if row:
+            print(f"Login: Found credential for user: {row[0]}")
+        else:
+            print(f"Login: Credential not found in database")
+            print(f"Login: Checking if we need to handle base64 encoding differences...")
             
+            # Try alternative ways of representing the credential ID (some browsers encode differently)
+            # This is a workaround for cross-device compatibility
+            alternative_id = credential_id.replace('+', '-').replace('/', '_').replace('=', '')
+            print(f"Login: Trying alternative ID format: {alternative_id[:15]}...")
+            cursor.execute("SELECT user_id FROM security_keys WHERE credential_id=?", (alternative_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                print(f"Login: Found with alternative ID for user: {row[0]}")
+            else:
+                print(f"Login: Credential not found with alternative format either")
+                conn.close()
+                return jsonify({'error': 'Unknown credential'}), 400
+                
         user_id = row[0]
+        
+        # Get all credentials for this user for debugging
+        cursor.execute("SELECT credential_id FROM security_keys WHERE user_id=?", (user_id,))
+        user_creds = cursor.fetchall()
+        print(f"Login: User {user_id} has {len(user_creds)} registered credential(s)")
+        
+        conn.close()
         
         # Set session
         session['authenticated'] = True
         session['user_id'] = user_id
+        print(f"Login: Updated session: {dict(session)}")
         
         return jsonify({
             'status': 'success',
@@ -823,6 +906,8 @@ def webauthn_login_complete():
         })
         
     except Exception as e:
+        print(f"Login error: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 @app.route('/logout', methods=['POST'])
