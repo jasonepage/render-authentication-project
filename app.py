@@ -187,6 +187,28 @@ def extract_attestation_info(attestation_object_base64):
             aaguid_bytes = auth_data_bytes[37:53]
             aaguid = bytes_to_base64url(aaguid_bytes)
             print(f"DEBUG - Extracted AAGUID: {aaguid}")
+            
+            # Special handling for Identiv keys (known to have issues)
+            if aaguid == "AAAAAAAAAAAAAAAAAAAAAA":  # Identiv often uses all zeros
+                try:
+                    # Try to extract Identiv-specific identifiers from attestation statement
+                    statement = attestation_data.get('attStmt', {})
+                    fmt = attestation_data.get('fmt', '')
+                    
+                    # Identiv often uses 'packed' format with specific certificate structure
+                    if fmt == 'packed' and 'x5c' in statement:
+                        # Extract manufacturer info from certificate
+                        cert_data = statement['x5c'][0] if statement.get('x5c') else None
+                        if cert_data:
+                            # Use certificate data as additional identifier
+                            cert_hash = hashlib.sha256(cert_data).hexdigest()
+                            print(f"DEBUG - Identiv cert hash: {cert_hash[:16]}...")
+                            
+                            # Create a synthetic AAGUID for Identiv
+                            aaguid = f"identiv-{cert_hash[:16]}"
+                            print(f"DEBUG - Created synthetic Identiv AAGUID: {aaguid}")
+                except Exception as identiv_err:
+                    print(f"DEBUG - Identiv special handling failed: {str(identiv_err)}")
         
         # Create a hash of the entire attestation object for uniqueness
         attestation_hash = hashlib.sha256(attestation_object).hexdigest()
@@ -233,6 +255,9 @@ def find_existing_user_by_key_identifiers(aaguid, combined_key_hash):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
+        # Special handling for Identiv keys
+        is_identiv = aaguid and aaguid.startswith("identiv-")
+        
         # Try to find by combined hash first (more specific)
         if combined_key_hash:
             cursor.execute("SELECT user_id FROM security_keys WHERE combined_key_hash = ?", (combined_key_hash,))
@@ -242,9 +267,15 @@ def find_existing_user_by_key_identifiers(aaguid, combined_key_hash):
                 conn.close()
                 return result[0]
         
-        # Then try AAGUID if available
+        # Then try by AAGUID (for same model keys)
         if aaguid:
-            cursor.execute("SELECT user_id FROM security_keys WHERE aaguid = ?", (aaguid,))
+            # For Identiv keys, use a more specific query
+            if is_identiv:
+                print(f"DEBUG - Searching for Identiv key with identifier: {aaguid}")
+                cursor.execute("SELECT user_id FROM security_keys WHERE aaguid LIKE 'identiv-%'")
+            else:
+                cursor.execute("SELECT user_id FROM security_keys WHERE aaguid = ?", (aaguid,))
+                
             result = cursor.fetchone()
             if result:
                 print(f"DEBUG - Found existing user by AAGUID: {result[0]}")
@@ -252,7 +283,6 @@ def find_existing_user_by_key_identifiers(aaguid, combined_key_hash):
                 return result[0]
         
         conn.close()
-        print("DEBUG - No existing user found for these key identifiers")
         return None
     except Exception as e:
         print(f"DEBUG - Error finding existing user: {str(e)}")
