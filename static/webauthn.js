@@ -664,7 +664,7 @@ const webAuthn = {
             // Store userId for later use
             this.currentUserId = userId;
             
-            // Display user is authenticated along with their ID and username cycling button
+            // Display user is authenticated along with their ID
             const displayUserId = userId ? userId.substring(0, 8) + '...' : 'Unknown';
             
             // Get current username from server
@@ -679,12 +679,15 @@ const webAuthn = {
                     <p>You are authenticated!</p>
                     <div class="user-info">
                         <p class="user-info-display">
-                            <span class="username-display">Username: <span class="username-value">${username}</span></span>
+                            <span class="username-display">Username: <span class="username-value">${username}</span></span><br>
                             <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
                         </p>
-                        <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                        <div class="button-group">
+                            <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                            <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
+                            <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                        </div>
                     </div>
-                    <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
                 `;
             })
             .catch(error => {
@@ -696,9 +699,12 @@ const webAuthn = {
                         <p class="user-info-display">
                             <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
                         </p>
-                        <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                        <div class="button-group">
+                            <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                            <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
+                            <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                        </div>
                     </div>
-                    <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
                 `;
             });
             
@@ -719,6 +725,7 @@ const webAuthn = {
                 <div class="auth-buttons">
                     <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register Security Key</button>
                     <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login</button>
+                    <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
                 </div>
             `;
             
