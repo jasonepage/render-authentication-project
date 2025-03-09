@@ -803,63 +803,63 @@ const webAuthn = {
     // Display messages in the UI
     displayMessages: function(messages) {
         const messageList = document.getElementById('message-list');
-        const messagesContainer = document.getElementById('messages');
-        const container = messagesContainer || messageList;
-        
-        if (!container) {
-            this.logError('Message container element not found');
-            return;
-        }
-        
-        // Clear current messages
-        container.innerHTML = '';
-        
+        if (!messageList) return;
+
+        // Clear existing messages
+        messageList.innerHTML = '';
+
         if (messages.length === 0) {
-            // Show placeholder message
-            const placeholder = document.createElement('div');
-            placeholder.className = 'message message-system';
-            placeholder.textContent = 'No messages yet. Login to start chatting!';
-            container.appendChild(placeholder);
+            messageList.innerHTML = '<p class="no-messages">No messages yet. Login to start chatting!</p>';
             return;
         }
-        
-        // Add each message
-        messages.forEach(message => {
-            const messageElement = document.createElement('div');
-            messageElement.className = 'message';
+
+        messages.forEach(msg => {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
             
-            // Check if this is the current user's message
-            const isCurrentUser = this.currentUserId && message.user === this.currentUserId;
-            if (isCurrentUser) {
-                messageElement.classList.add('message-user');
+            // Create username element
+            const usernameSpan = document.createElement('span');
+            usernameSpan.className = 'username';
+            usernameSpan.textContent = msg.username + (msg.user === this.currentUserId ? ' (You)' : '');
+            
+            // Create timestamp element
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'timestamp';
+            timeSpan.textContent = new Date(msg.time).toLocaleTimeString();
+            
+            // Create message content element
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            // Check if message contains an image link starting with @
+            const imageMatch = msg.message.match(/^@(https?:\/\/.*\.(?:gif|png|jpe?g))$/i);
+            if (imageMatch) {
+                // Create image element
+                const img = document.createElement('img');
+                img.src = imageMatch[1];
+                img.alt = 'Chat Image';
+                img.className = 'chat-image';
+                // Add loading indicator
+                img.onload = () => img.classList.add('loaded');
+                img.onerror = () => {
+                    img.style.display = 'none';
+                    contentDiv.textContent = msg.message;
+                };
+                contentDiv.appendChild(img);
             } else {
-                messageElement.classList.add('message-other');
+                contentDiv.textContent = msg.message;
             }
             
-            // Format the username for display
-            let displayName = message.username || 'Anonymous';
-            if (isCurrentUser) {
-                displayName += ' (You)';
-            }
+            // Assemble message
+            messageDiv.appendChild(usernameSpan);
+            messageDiv.appendChild(timeSpan);
+            messageDiv.appendChild(contentDiv);
             
-            // Create message meta element
-            const metaElement = document.createElement('div');
-            metaElement.className = 'message-meta';
-            metaElement.textContent = `${displayName} • ${this.formatTime(message.time)}`;
-            
-            // Create message text
-            const textElement = document.createElement('div');
-            textElement.textContent = message.message;
-            
-            // Add elements to message
-            messageElement.appendChild(metaElement);
-            messageElement.appendChild(textElement);
-            
-            container.appendChild(messageElement);
+            messageList.appendChild(messageDiv);
         });
         
         // Scroll to bottom
-        container.scrollTop = container.scrollHeight;
+        messageList.scrollTop = messageList.scrollHeight;
     },
     
     // Helper to format time
@@ -915,61 +915,57 @@ const webAuthn = {
     
     // Send a message
     sendMessage: function(event) {
-        if (event) {
-            event.preventDefault();
-        }
+        event.preventDefault();
         
-        // Try different message input element IDs
         const messageInput = document.getElementById('message-input');
-        if (!messageInput) {
-            this.logError('Message input element not found');
-            return;
-        }
+        if (!messageInput) return;
         
         const message = messageInput.value.trim();
+        if (!message) return;
         
-        if (!message) {
-            return;
+        // Validate image links
+        const imageMatch = message.match(/^@(https?:\/\/.*\.(?:gif|png|jpe?g))$/i);
+        if (imageMatch) {
+            // Pre-validate the image URL
+            const img = new Image();
+            img.onerror = () => {
+                alert('Invalid image URL or unsupported format. Please check the URL and try again.');
+                return;
+            };
+            img.src = imageMatch[1];
         }
         
-        this.log('Sending message:', message);
-        
-        const sendMessageUrl = this.getEndpointPath('send_message');
-        
-        // Show sending state
-        messageInput.disabled = true;
-        
-        fetch(sendMessageUrl, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json'
+        this.debugFetch(
+            this.getEndpointPath('send_message'),
+            {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ message })
             },
-            body: JSON.stringify({ message: message })
-        })
-        .then(response => {
-            if (!response.ok) {
-                return response.text().then(text => {
-                    throw new Error(`Failed to send message (${response.status}): ${text}`);
-                });
+            response => {
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        this.log(`Error response: ${text}`);
+                        throw new Error(`Failed to send message (${response.status}): ${text}`);
+                    });
+                }
+                return response.json();
             }
-            return response.json();
-        })
+        )
         .then(result => {
-            this.log('Message sent successfully:', result);
+            this.log('Message sent successfully');
             messageInput.value = '';
-            
-            // Immediately load messages to show the new message
             this.loadMessages();
         })
         .catch(error => {
-            this.logError('Error sending message:', error);
+            this.log(`Send message error: ${error.message}`);
             alert(`Failed to send message: ${error.message}`);
-        })
-        .finally(() => {
-            messageInput.disabled = false;
-            messageInput.focus();
         });
+        
+        return false;
     },
     
     // Check auth status and update UI accordingly
@@ -1135,103 +1131,61 @@ const webAuthn = {
     }
 };
 
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
-    // Add custom CSS styles for WebAuthn elements
-    const style = document.createElement('style');
-    style.textContent = `
-        .user-info-display {
-            font-size: 0.9em;
-            margin: 5px 0;
-            color: #666;
-            background-color: #f5f5f5;
-            padding: 8px 12px;
-            border-radius: 4px;
-            display: flex;
-            gap: 15px;
-            align-items: center;
-        }
-        .username-display, .user-id-display {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-        }
-        .username-value {
-            font-weight: bold;
-            color: #2196F3;
-        }
-        .user-id-value {
-            font-weight: bold;
-            color: #4CAF50;
-            cursor: help;
-        }
-        .auth-buttons {
-            display: flex;
-            gap: 10px;
-            margin-top: 10px;
-        }
-        .button {
-            padding: 8px 15px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .logout-button {
-            background-color: #f44336;
-        }
-        .button:hover {
-            opacity: 0.9;
-        }
-        .debug-button {
-            display: block;
-            width: 100%;
-        }
-        .user-info {
-            margin: 10px 0;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-        }
-        .cycle-username-button {
-            background-color: #6c757d;
-            margin-top: 5px;
-            font-size: 14px;
-            padding: 6px 12px;
-            transition: all 0.3s ease;
-        }
-        .cycle-username-button:hover {
-            background-color: #5a6268;
-            transform: scale(1.02);
-        }
-        .cycle-username-button:disabled {
-            opacity: 0.7;
-            cursor: not-allowed;
-        }
-        .username-notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background-color: #28a745;
-            color: white;
-            padding: 15px 25px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 2.7s;
-            z-index: 1000;
-        }
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-        @keyframes fadeOut {
-            from { opacity: 1; }
-            to { opacity: 0; }
-        }
-    `;
-    document.head.appendChild(style);
+// Add styles to the document
+const styles = document.createElement('style');
+styles.textContent = `
+    .chat-image {
+        max-width: 300px;
+        max-height: 200px;
+        border-radius: 8px;
+        margin: 5px 0;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        object-fit: contain;
+    }
     
-    // Initialize WebAuthn client
+    .chat-image.loaded {
+        opacity: 1;
+    }
+    
+    .message {
+        padding: 10px;
+        margin: 5px 0;
+        background: #f5f5f5;
+        border-radius: 8px;
+        word-wrap: break-word;
+    }
+    
+    .username {
+        font-weight: bold;
+        color: #2196F3;
+        margin-right: 8px;
+    }
+    
+    .timestamp {
+        color: #666;
+        font-size: 0.8em;
+    }
+    
+    .message-content {
+        margin-top: 5px;
+    }
+    
+    .no-messages {
+        text-align: center;
+        color: #666;
+        padding: 20px;
+    }
+    
+    #message-list {
+        max-height: 500px;
+        overflow-y: auto;
+        padding: 10px;
+    }
+`;
+document.head.appendChild(styles);
+
+// Initialize when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
     webAuthn.init();
 });
