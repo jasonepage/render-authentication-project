@@ -7,6 +7,8 @@ import time
 import base64
 import datetime
 import traceback
+import hashlib
+import cbor2
 from functools import wraps
 import platform
 
@@ -63,13 +65,17 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Create security_keys table
+    # Create security_keys table with additional columns for physical key identification
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS security_keys (
         id INTEGER PRIMARY KEY,
         credential_id TEXT UNIQUE NOT NULL,
         user_id TEXT NOT NULL,
         public_key TEXT NOT NULL,
+        aaguid TEXT,
+        attestation_hash TEXT,
+        combined_key_hash TEXT,
+        resident_key BOOLEAN,
         created_at TIMESTAMP NOT NULL
     )
     ''')
@@ -83,6 +89,10 @@ def init_db():
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+    
+    # Create indices for faster lookups
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_aaguid ON security_keys (aaguid)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_combined_key_hash ON security_keys (combined_key_hash)')
     
     conn.commit()
     conn.close()
@@ -154,6 +164,100 @@ def normalize_credential_id(credential_id):
     # Then convert to URL-safe format (with - and _)
     urlsafe_format = standard_format.replace('+', '-').replace('/', '_').replace('=', '')
     return urlsafe_format
+
+def extract_attestation_info(attestation_object_base64):
+    """
+    Extract key identifiers from attestation object
+    Returns a tuple of (aaguid, attestation_hash, combined_key_hash, resident_key)
+    """
+    try:
+        # Decode attestation object
+        attestation_object = base64url_to_bytes(attestation_object_base64)
+        
+        # Parse CBOR encoded attestation object
+        attestation_data = cbor2.loads(attestation_object)
+        print(f"DEBUG - Attestation data keys: {attestation_data.keys()}")
+        
+        # Extract authenticator data
+        auth_data_bytes = attestation_data.get('authData', b'')
+        
+        # Extract AAGUID (starts at byte 37, 16 bytes long)
+        aaguid = None
+        if len(auth_data_bytes) >= 53:  # Ensure we have enough bytes
+            aaguid_bytes = auth_data_bytes[37:53]
+            aaguid = bytes_to_base64url(aaguid_bytes)
+            print(f"DEBUG - Extracted AAGUID: {aaguid}")
+        
+        # Create a hash of the entire attestation object for uniqueness
+        attestation_hash = hashlib.sha256(attestation_object).hexdigest()
+        print(f"DEBUG - Attestation hash: {attestation_hash[:16]}...")
+        
+        # Extract attestation statement format
+        fmt = attestation_data.get('fmt', '')
+        print(f"DEBUG - Attestation format: {fmt}")
+        
+        # Extract attestation statement
+        statement = attestation_data.get('attStmt', {})
+        print(f"DEBUG - Attestation statement keys: {statement.keys()}")
+        
+        # Check if this is a resident key
+        flags_byte = auth_data_bytes[32] if len(auth_data_bytes) > 32 else 0
+        resident_key = bool(flags_byte & 0x40)  # bit 6 indicates if resident key
+        print(f"DEBUG - Resident key flag: {resident_key}, Flags byte: {flags_byte}")
+        
+        # Create a combined hash that includes both AAGUID and attestation info
+        # This gives us a more unique identifier for the physical key
+        combined_data = aaguid_bytes if aaguid_bytes else b''
+        if 'sig' in statement:
+            combined_data += statement['sig']
+        
+        combined_key_hash = hashlib.sha256(combined_data).hexdigest() if combined_data else None
+        print(f"DEBUG - Combined key hash: {combined_key_hash[:16] if combined_key_hash else None}...")
+        
+        return (aaguid, attestation_hash, combined_key_hash, resident_key)
+    except Exception as e:
+        print(f"DEBUG - Error extracting attestation info: {str(e)}")
+        print(traceback.format_exc())
+        return (None, None, None, False)
+
+def find_existing_user_by_key_identifiers(aaguid, combined_key_hash):
+    """
+    Check if a physical key is already registered by looking at its identifiers
+    Returns user_id if found, None otherwise
+    """
+    if not aaguid and not combined_key_hash:
+        print("DEBUG - No key identifiers provided for lookup")
+        return None
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Try to find by combined hash first (more specific)
+        if combined_key_hash:
+            cursor.execute("SELECT user_id FROM security_keys WHERE combined_key_hash = ?", (combined_key_hash,))
+            result = cursor.fetchone()
+            if result:
+                print(f"DEBUG - Found existing user by combined hash: {result[0]}")
+                conn.close()
+                return result[0]
+        
+        # Then try AAGUID if available
+        if aaguid:
+            cursor.execute("SELECT user_id FROM security_keys WHERE aaguid = ?", (aaguid,))
+            result = cursor.fetchone()
+            if result:
+                print(f"DEBUG - Found existing user by AAGUID: {result[0]}")
+                conn.close()
+                return result[0]
+        
+        conn.close()
+        print("DEBUG - No existing user found for these key identifiers")
+        return None
+    except Exception as e:
+        print(f"DEBUG - Error finding existing user: {str(e)}")
+        print(traceback.format_exc())
+        return None
 
 # ==========================================
 # Basic routes
@@ -259,11 +363,12 @@ def webauthn_register_options():
             ],
             "authenticatorSelection": {
                 "authenticatorAttachment": "cross-platform",
-                "requireResidentKey": False,
+                "requireResidentKey": True,  # Require resident key for cross-device functionality
+                "residentKey": "required",   # Explicitly require resident key
                 "userVerification": "discouraged"
             },
             "timeout": 120000,  # 2 minutes
-            "attestation": "none"  # Don't require attestation
+            "attestation": "direct"  # Request direct attestation to get AAGUID and other info
         }
         
         print(f"Register Options: Returning options...")
@@ -301,7 +406,33 @@ def webauthn_register_complete():
         if not data.get('response') or not data['response'].get('clientDataJSON') or not data['response'].get('attestationObject'):
             print("Register Error: Missing required attestation data")
             return jsonify({'error': 'Invalid attestation data'}), 400
+         
+        # Extract key identifiers from attestation
+        attestation_object = data['response']['attestationObject']
+        aaguid, attestation_hash, combined_key_hash, resident_key = extract_attestation_info(attestation_object)
+        
+        # Check if this physical key is already registered
+        existing_user_id = find_existing_user_by_key_identifiers(aaguid, combined_key_hash)
+        
+        print(f"Register Complete: Key identifiers - AAGUID: {aaguid}, Combined hash: {combined_key_hash}, Resident key: {resident_key}")
+        print(f"Register Complete: Existing user found: {existing_user_id}")
+        
+        # If this key is already associated with a user, log in as that user instead
+        if existing_user_id:
+            print(f"Register Complete: Security key already registered to user {existing_user_id}")
             
+            # Set the session to be authenticated as the existing user
+            session['authenticated'] = True
+            session['user_id'] = existing_user_id
+            session.pop('user_id_for_registration', None)
+            
+            # Return a response indicating this is an existing key
+            return jsonify({
+                'status': 'existing_key',
+                'message': 'This security key is already registered',
+                'userId': existing_user_id
+            })
+        
         # For this simplification, we'll just store the credential without complex validation
         public_key = json.dumps({
             'id': credential_id,
@@ -326,11 +457,15 @@ def webauthn_register_complete():
         if cursor.fetchone():
             print(f"Register Complete: Credential ID already exists, skipping insertion")
         else:
-            # Store only the normalized version
+            # Store with all the key identifiers
             print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
             cursor.execute(
-                "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
-                (normalized_credential_id, user_id, public_key)
+                """INSERT INTO security_keys 
+                   (credential_id, user_id, public_key, aaguid, attestation_hash, 
+                    combined_key_hash, resident_key, created_at) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (normalized_credential_id, user_id, public_key, aaguid, 
+                 attestation_hash, combined_key_hash, resident_key)
             )
         
         conn.commit()
@@ -607,41 +742,56 @@ def debug_all():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT credential_id, user_id, public_key, created_at FROM security_keys")
+        # Get database schema for inspection
+        cursor.execute("PRAGMA table_info(security_keys)")
+        columns = [row[1] for row in cursor.fetchall()]
+        debug_data["security_keys_schema"] = columns
+        
+        # Query with all available columns
+        query = "SELECT " + ", ".join(columns) + " FROM security_keys"
+        cursor.execute(query)
+        
+        # Get column names for mapping
+        column_names = [description[0] for description in cursor.description]
+        
         keys = []
         for row in cursor.fetchall():
-            # Detailed credential info for debugging
-            credential_id = row[0]
-            user_id = row[1]
-            public_key = row[2]
+            # Map row values to named dictionary
+            key_data = {column_names[i]: row[i] for i in range(len(row))}
             
-            # Check if credential_id is valid base64url
-            credential_valid = True
-            try:
-                # Try to decode the credential_id to check if it's valid
-                padded = credential_id + '=' * (4 - len(credential_id) % 4)
-                standard = padded.replace('-', '+').replace('_', '/') 
-                base64.b64decode(standard)
-            except Exception as e:
-                credential_valid = False
+            # Add derived info
+            if 'credential_id' in key_data:
+                key_data['credential_id_length'] = len(key_data['credential_id']) if key_data['credential_id'] else 0
+                
+                # Check if credential_id is valid base64url
+                credential_valid = True
+                try:
+                    if key_data['credential_id']:
+                        # Try to decode to check if it's valid
+                        padded = key_data['credential_id'] + '=' * (4 - len(key_data['credential_id']) % 4)
+                        standard = padded.replace('-', '+').replace('_', '/') 
+                        base64.b64decode(standard)
+                except Exception as e:
+                    credential_valid = False
+                
+                key_data['credential_valid_base64'] = credential_valid
             
-            keys.append({
-                "credential_id": credential_id,
-                "credential_id_length": len(credential_id),
-                "credential_valid_base64": credential_valid,
-                "user_id": user_id,
-                "public_key_snippet": str(public_key)[:30] + "..." if public_key else None,
-                "created_at": row[3]
-            })
+            # Truncate large fields for readability
+            if 'public_key' in key_data and key_data['public_key']:
+                key_data['public_key_snippet'] = key_data['public_key'][:30] + "..." if len(key_data['public_key']) > 30 else key_data['public_key']
+            
+            keys.append(key_data)
+        
         debug_data["security_keys"] = keys
         
-        # Add database info
+        # Get database tables
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         debug_data["database_tables"] = [row[0] for row in cursor.fetchall()]
         
         conn.close()
     except Exception as e:
         debug_data["error"] = str(e)
+        debug_data["traceback"] = traceback.format_exc()
     
     return jsonify(debug_data)
 
@@ -713,4 +863,4 @@ if __name__ == '__main__':
     import os
     # Use PORT environment variable for cloud deployment compatibility
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True) 
+    app.run(host='0.0.0.0', port=port, debug=True)

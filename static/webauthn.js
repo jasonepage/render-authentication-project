@@ -1,12 +1,21 @@
 /**
- * WebAuthn Client Handler v1.5.0
- * Optimized for cross-platform FIDO2 security key authentication
+ * WebAuthn Client Handler v1.6.0
+ * Optimized for cross-platform FIDO2 security key authentication with improved debugging
  */
 const webAuthn = {
-    version: '1.5.0',
+    version: '1.6.0',
     
     // Enable debug mode to see all logs
     debugMode: true,
+    
+    // Store current user ID when authenticated
+    currentUserId: null,
+    
+    // Remember if a key was already registered
+    lastKeyRegistration: {
+        wasExistingKey: false,
+        userId: null
+    },
     
     // Simplified endpoint path function
     getEndpointPath: function(endpoint) {
@@ -14,27 +23,48 @@ const webAuthn = {
         return `/${endpoint}`;
     },
     
-    // Enhanced logging function
+    // Enhanced logging with timestamps
     log: function(message, obj) {
-        // Always log in debug mode
-        if (this.debugMode || !window.location.href.includes('render-authentication-project.onrender.com') || 
-            window.location.search.includes('debug=true')) {
+        const timestamp = new Date().toISOString().substr(11, 8); // HH:MM:SS
+        if (this.debugMode) {
             if (obj) {
-                console.log(`%c WebAuthn [${this.version}]: ${message}`, 'color: #4CAF50; font-weight: bold;', obj);
+                console.log(`%c WebAuthn [${timestamp}]: ${message}`, 'color: #4CAF50; font-weight: bold;', obj);
             } else {
-                console.log(`%c WebAuthn [${this.version}]: ${message}`, 'color: #4CAF50; font-weight: bold;');
+                console.log(`%c WebAuthn [${timestamp}]: ${message}`, 'color: #4CAF50; font-weight: bold;');
             }
         }
     },
     
     // Error logging with more visibility
     logError: function(message, error) {
-        console.error(`%c WebAuthn ERROR: ${message}`, 'color: #f44336; font-weight: bold;', error);
+        const timestamp = new Date().toISOString().substr(11, 8);
+        console.error(`%c WebAuthn ERROR [${timestamp}]: ${message}`, 'color: #f44336; font-weight: bold;', error);
     },
     
     // Warning logging
     logWarn: function(message, obj) {
-        console.warn(`%c WebAuthn WARNING: ${message}`, 'color: #FF9800; font-weight: bold;', obj || '');
+        const timestamp = new Date().toISOString().substr(11, 8);
+        console.warn(`%c WebAuthn WARNING [${timestamp}]: ${message}`, 'color: #FF9800; font-weight: bold;', obj || '');
+    },
+    
+    // Info about device and environment
+    logEnvironmentInfo: function() {
+        const info = {
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            vendor: navigator.vendor,
+            webAuthnSupport: !!navigator.credentials && !!navigator.credentials.create,
+            isIOS: this.isIOS(),
+            isMac: /Mac/.test(navigator.platform),
+            isChrome: /Chrome/.test(navigator.userAgent) && !/Edge/.test(navigator.userAgent),
+            isFirefox: /Firefox/.test(navigator.userAgent),
+            isSafari: /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent),
+            isSecureContext: window.isSecureContext
+        };
+        
+        console.log("%c WebAuthn Environment", "color: #2196F3; font-weight: bold; font-size: 14px;");
+        console.table(info);
+        return info;
     },
     
     // Check if device is iOS (needed for special handling)
@@ -42,12 +72,10 @@ const webAuthn = {
         return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     },
     
-    // Base64URL to ArrayBuffer with more robust error handling for Mac
+    // Base64URL to ArrayBuffer with more robust error handling
     base64urlToArrayBuffer: function(base64url) {
-        this.log(`Converting base64url to ArrayBuffer:`, base64url);
-        console.log("DEBUG - Raw base64url data:", {
-            value: base64url,
-            type: typeof base64url,
+        this.log(`Converting base64url to ArrayBuffer:`, {
+            value: base64url ? base64url.substring(0, 20) + "..." : "null",
             length: base64url?.length || 0
         });
         
@@ -61,24 +89,14 @@ const webAuthn = {
             const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
             const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/') + padding;
             
-            // Debug - log the exact string being passed to atob
-            console.log("DEBUG - Processed base64 for atob:", {
-                original: base64url,
-                withPadding: base64,
-                paddingAdded: padding.length
-            });
-            
             // Try to decode using the native atob function
             let binary;
             try {
-                console.log("DEBUG - Calling atob with:", base64);
                 binary = atob(base64);
-                console.log("DEBUG - atob succeeded, result length:", binary.length);
             } catch (e) {
                 this.logError(`atob error: ${e.message}. Trying fallback approach...`, e);
                 // Try a more forgiving approach by cleaning the string
                 const cleanBase64 = base64.replace(/[^A-Za-z0-9\+\/\=]/g, '');
-                console.log("DEBUG - Fallback: cleaned base64:", cleanBase64);
                 binary = atob(cleanBase64);
             }
             
@@ -91,14 +109,6 @@ const webAuthn = {
             return buffer;
         } catch (error) {
             this.logError(`Base64URL conversion failed`, error);
-            // Print detailed debugging info
-            console.error('Base64URL Conversion Failure Details:', {
-                input: base64url,
-                inputType: typeof base64url,
-                inputLength: base64url ? base64url.length : 0,
-                error: error.message,
-                stack: error.stack
-            });
             throw error;
         }
     },
@@ -221,12 +231,7 @@ const webAuthn = {
     // Register a new security key
     registerKey: function() {
         this.log('Starting registration process');
-        console.log('DEBUG - Browser details:', {
-            userAgent: navigator.userAgent,
-            platform: navigator.platform,
-            vendor: navigator.vendor,
-            webAuthnSupport: !!navigator.credentials && !!navigator.credentials.create
-        });
+        this.logEnvironmentInfo();
         
         this.showModal('Please insert your security key and follow the browser instructions...');
 
@@ -267,23 +272,16 @@ const webAuthn = {
         )
         .then(options => {
             this.log(`Received registration options:`, options);
-            console.log("DEBUG - Raw registration options:", JSON.parse(JSON.stringify(options)));
             
             // Debug the challenge format specifically
-            console.log("DEBUG - Challenge details:", {
+            this.log("Challenge details:", {
                 value: options.challenge,
                 type: typeof options.challenge,
                 length: options.challenge?.length || 0
             });
             
-            // Debug the user.id format
-            if (options.user && options.user.id) {
-                console.log("DEBUG - User ID details:", {
-                    value: options.user.id,
-                    type: typeof options.user.id,
-                    length: options.user.id?.length || 0
-                });
-            }
+            // Debug the authenticatorSelection settings
+            this.log("AuthenticatorSelection settings:", options.authenticatorSelection);
             
             // Enhanced error handling and logging for challenge conversion
             try {
@@ -324,14 +322,16 @@ const webAuthn = {
                 }
             }
             
-            // Mac-specific adjustments
+            // Device-specific adjustments
             if (isMac) {
-                // macOS sometimes needs specific settings
                 this.log('Applying Mac-specific adjustments');
+                // Accept Mac's defaults, but ensure residentKey is set correctly
                 options.authenticatorSelection = options.authenticatorSelection || {};
-                // Let's not be too restrictive on Mac
-                options.authenticatorSelection.requireResidentKey = false;
-                options.authenticatorSelection.userVerification = 'discouraged';
+                
+                // Keep requireResidentKey true, but ensure residentKey is properly set
+                if (options.authenticatorSelection.requireResidentKey) {
+                    options.authenticatorSelection.residentKey = "required";
+                }
                 
                 this.log('Adjusted options for Mac compatibility', options.authenticatorSelection);
             }
@@ -339,7 +339,7 @@ const webAuthn = {
             this.log('Converted all fields, final options:', options);
             
             // Step 2: Create credentials using WebAuthn API
-            console.log("DEBUG - Calling navigator.credentials.create with:", JSON.parse(JSON.stringify({publicKey: options})));
+            this.log("Calling navigator.credentials.create");
             return navigator.credentials.create({
                 publicKey: options
             }).catch(err => {
@@ -355,7 +355,12 @@ const webAuthn = {
         })
         .then(credential => {
             this.log('Credential created successfully, preparing data for server');
-            console.log("DEBUG - Raw credential object:", credential);
+            this.log("Raw credential object:", {
+                id: credential.id,
+                type: credential.type,
+                rawId: new Uint8Array(credential.rawId).slice(0, 10), // Preview of the rawId
+                responseKeys: Object.keys(credential.response)
+            });
             
             // Prepare the credential data to send to server
             try {
@@ -363,10 +368,10 @@ const webAuthn = {
                 const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
                 const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
                 
-                console.log("DEBUG - Encoded credential data:", {
-                    credentialId: credentialId,
-                    clientDataJSON: clientDataJSON?.substring(0, 50) + "...",
-                    attestationObjectPreview: attestationObject?.substring(0, 50) + "..."
+                this.log("Encoded credential data:", {
+                    credentialId: credentialId.substring(0, 20) + "...",
+                    clientDataJSONPreview: clientDataJSON.substring(0, 20) + "...",
+                    attestationObjectPreview: attestationObject.substring(0, 20) + "..."
                 });
                 
                 const registerCompleteUrl = this.getEndpointPath('register_complete');
@@ -405,14 +410,34 @@ const webAuthn = {
             return response.json();
         })
         .then(result => {
-            this.log(`Registration complete, result: ${JSON.stringify(result)}`);
+            this.log(`Registration complete, result:`, result);
             this.hideModal();
             
-            // Update the UI to reflect the authenticated state
-            this.updateUI(true, result.userId);
-            
-            // Alert the user
-            alert('Security key registered successfully!');
+            // Check if this was an existing key (already registered)
+            if (result.status === 'existing_key') {
+                this.lastKeyRegistration = {
+                    wasExistingKey: true,
+                    userId: result.userId
+                };
+                
+                // Update the UI to reflect the authenticated state with the existing user
+                this.updateUI(true, result.userId);
+                
+                // Alert the user that this key was already registered
+                alert('This security key is already registered and has been used to log in to your existing account.');
+            } else {
+                // New registration
+                this.lastKeyRegistration = {
+                    wasExistingKey: false,
+                    userId: result.userId
+                };
+                
+                // Update the UI to reflect the authenticated state
+                this.updateUI(true, result.userId);
+                
+                // Alert the user
+                alert('Security key registered successfully!');
+            }
         })
         .catch(error => {
             this.log(`Registration error: ${error.message}`);
@@ -458,7 +483,7 @@ const webAuthn = {
             }
         )
         .then(options => {
-            this.log(`Received login options: ${JSON.stringify(options).substring(0, 100)}...`);
+            this.log(`Received login options:`, options);
             
             // Convert base64url encoded values to ArrayBuffer
             options.challenge = this.base64urlToArrayBuffer(options.challenge);
@@ -536,11 +561,14 @@ const webAuthn = {
             return response.json();
         })
         .then(result => {
-            this.log(`Login complete, result: ${JSON.stringify(result)}`);
+            this.log(`Login complete, result:`, result);
             this.hideModal();
             
             // Update the UI to reflect the authenticated state
             this.updateUI(true, result.userId);
+            
+            // Store the user ID
+            this.currentUserId = result.userId;
             
             // Alert the user
             alert('Login successful!');
@@ -581,6 +609,11 @@ const webAuthn = {
         })
         .then(result => {
             this.log('Logout successful');
+            
+            // Clear stored user ID
+            this.currentUserId = null;
+            
+            // Update UI
             this.updateUI(false);
         })
         .catch(error => {
@@ -600,6 +633,9 @@ const webAuthn = {
         const chatForm = document.getElementById('chat-form');
         
         if (isAuthenticated) {
+            // Store userId for later use
+            this.currentUserId = userId;
+            
             // Display user is authenticated along with their ID
             const displayUserId = userId ? userId.substring(0, 8) + '...' : 'Unknown';
             authSection.innerHTML = `
@@ -609,14 +645,19 @@ const webAuthn = {
             `;
             
             // Show the message interface
-            messageList.style.display = 'block';
-            chatForm.style.display = 'flex';
+            if (messageList) messageList.style.display = 'block';
+            if (chatForm) chatForm.style.display = 'flex';
             
             // Load messages
             this.loadMessages();
             
             // Start polling for messages
             this.startMessagePolling();
+            
+            // Dispatch event that user is authenticated
+            document.dispatchEvent(new CustomEvent('userAuthenticated', { 
+                detail: { userId: userId }
+            }));
         } else {
             // Display unauthenticated state with registration and login buttons
             authSection.innerHTML = `
@@ -628,11 +669,17 @@ const webAuthn = {
             `;
             
             // Hide the message interface
-            messageList.style.display = 'none';
-            chatForm.style.display = 'none';
+            if (messageList) messageList.style.display = 'none';
+            if (chatForm) chatForm.style.display = 'none';
             
             // Stop polling for messages
             this.stopMessagePolling();
+            
+            // Clear current user ID
+            this.currentUserId = null;
+            
+            // Dispatch event that user logged out
+            document.dispatchEvent(new CustomEvent('userLoggedOut'));
         }
     },
 
@@ -668,55 +715,76 @@ const webAuthn = {
     // Display messages in the UI
     displayMessages: function(messages) {
         const messageList = document.getElementById('message-list');
-        if (!messageList) {
-            this.logError('Message list element not found');
+        const messagesContainer = document.getElementById('messages');
+        const container = messagesContainer || messageList;
+        
+        if (!container) {
+            this.logError('Message container element not found');
             return;
         }
         
         // Clear current messages
-        messageList.innerHTML = '';
+        container.innerHTML = '';
         
         if (messages.length === 0) {
             // Show placeholder message
             const placeholder = document.createElement('div');
-            placeholder.className = 'message-item system-message';
-            placeholder.innerHTML = '<strong>System</strong>: No messages yet. Start chatting!';
-            messageList.appendChild(placeholder);
+            placeholder.className = 'message message-system';
+            placeholder.textContent = 'No messages yet. Start chatting!';
+            container.appendChild(placeholder);
             return;
         }
         
         // Add each message
         messages.forEach(message => {
             const messageElement = document.createElement('div');
-            messageElement.className = 'message-item';
+            messageElement.className = 'message';
             
             // Check if this is the current user's message
             const isCurrentUser = this.currentUserId && message.user === this.currentUserId;
             if (isCurrentUser) {
-                messageElement.classList.add('own-message');
+                messageElement.classList.add('message-user');
+            } else {
+                messageElement.classList.add('message-other');
             }
             
             // Format the user ID for display (either "You" or first 8 chars)
             let displayUser = isCurrentUser ? 'You' : message.user.substring(0, 8) + '...';
             
-            // Create message content
-            messageElement.innerHTML = `
-                <span class="message-user">${displayUser}</span>
-                <span class="message-text">${this.escapeHtml(message.message)}</span>
-                <span class="message-time">${this.formatTime(message.time)}</span>
-            `;
+            // Create message meta element
+            const metaElement = document.createElement('div');
+            metaElement.className = 'message-meta';
+            metaElement.textContent = `${displayUser} • ${this.formatTime(message.time)}`;
             
-            messageList.appendChild(messageElement);
+            // Create message text
+            const textElement = document.createElement('div');
+            textElement.textContent = message.message;
+            
+            // Add elements to message
+            messageElement.appendChild(metaElement);
+            messageElement.appendChild(textElement);
+            
+            container.appendChild(messageElement);
         });
         
         // Scroll to bottom
-        messageList.scrollTop = messageList.scrollHeight;
+        container.scrollTop = container.scrollHeight;
     },
     
     // Helper to format time
     formatTime: function(timestamp) {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        if (!timestamp) return 'Unknown time';
+        
+        try {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString([], { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: true
+            });
+        } catch (e) {
+            return timestamp; // Fallback to raw timestamp
+        }
     },
     
     // Helper to escape HTML
@@ -760,7 +828,13 @@ const webAuthn = {
             event.preventDefault();
         }
         
+        // Try different message input element IDs
         const messageInput = document.getElementById('message-input');
+        if (!messageInput) {
+            this.logError('Message input element not found');
+            return;
+        }
+        
         const message = messageInput.value.trim();
         
         if (!message) {
@@ -837,49 +911,57 @@ const webAuthn = {
         });
     },
     
+    // Debug the current state of WebAuthn
+    debugState: function() {
+        console.log("%c WebAuthn Current State", "color: #9C27B0; font-weight: bold; font-size: 14px;");
+        console.table({
+            version: this.version,
+            currentUserId: this.currentUserId,
+            isAuthenticated: !!this.currentUserId,
+            lastKeyRegistration: this.lastKeyRegistration,
+            isPolling: !!this.messagePollingInterval
+        });
+        
+        // Check if we have credentials in the window
+        if (navigator.credentials && navigator.credentials.get) {
+            console.log("%c WebAuthn API Available", "color: #4CAF50; font-weight: bold;");
+        } else {
+            console.log("%c WebAuthn API NOT Available", "color: #F44336; font-weight: bold;");
+        }
+        
+        // Try to get server state
+        fetch(this.getEndpointPath('debug_all'), {
+            method: 'GET',
+            credentials: 'include'
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log("%c Server State", "color: #2196F3; font-weight: bold; font-size: 14px;");
+            console.log(data);
+        })
+        .catch(error => {
+            console.error("Failed to fetch server state:", error);
+        });
+        
+        return "Debug information printed to console";
+    },
+    
     // Initialize the application
     init: function() {
         this.log('Initializing WebAuthn client');
         
         // Log platform information
-        const isIOS = this.isIOS();
-        this.log(`Platform detection: iOS = ${isIOS}`);
-        this.log(`User Agent: ${navigator.userAgent}`);
+        const env = this.logEnvironmentInfo();
         
-        if (isIOS) {
+        if (env.isIOS) {
             this.log('iOS-specific optimizations will be applied');
         }
-        
-        // Log DOM availability for debugging
-        this.log('DOM elements:');
-        const elements = {
-            'auth-status': document.getElementById('auth-status'),
-            'status-message': document.getElementById('status-message'),
-            'auth-modal': document.getElementById('auth-modal'),
-            'modal': document.getElementById('modal'),
-            'modal-text': document.getElementById('modal-text'),
-            'modal-message': document.getElementById('modal-message'),
-            'message-list': document.getElementById('message-list'),
-            'messages': document.getElementById('messages'),
-            'chat-form': document.getElementById('chat-form'),
-            'message-input': document.getElementById('message-input'),
-            'send-button': document.getElementById('send-button')
-        };
-        
-        // Report which elements are missing
-        Object.entries(elements).forEach(([name, element]) => {
-            if (element) {
-                this.log(`DOM element found: #${name}`);
-            } else {
-                this.log(`Note: DOM element not found: #${name}`);
-            }
-        });
         
         // Check authentication status on page load
         this.checkAuthStatus();
         
-        // Setup event handlers for both UI styles
-        const chatForm = elements['chat-form'];
+        // Setup event handlers for message sending
+        const chatForm = document.getElementById('chat-form');
         if (chatForm) {
             chatForm.addEventListener('submit', (event) => {
                 this.sendMessage(event);
@@ -887,12 +969,25 @@ const webAuthn = {
             this.log('Chat form submit handler attached');
         }
         
-        const sendButton = elements['send-button'];
+        const sendButton = document.getElementById('send-button');
         if (sendButton) {
             sendButton.addEventListener('click', () => {
                 this.sendMessage();
             });
             this.log('Send button click handler attached');
+        }
+        
+        // Add a debug button if in development
+        if (this.debugMode && document.getElementById('auth-status')) {
+            const debugButton = document.createElement('button');
+            debugButton.textContent = 'Debug WebAuthn';
+            debugButton.className = 'button debug-button';
+            debugButton.style.backgroundColor = '#9C27B0';
+            debugButton.style.marginTop = '10px';
+            debugButton.onclick = () => { this.debugState(); return false; };
+            
+            document.getElementById('auth-status').appendChild(debugButton);
+            this.log('Debug button added');
         }
         
         this.log('Initialization complete');
@@ -901,21 +996,17 @@ const webAuthn = {
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    const chatForm = document.getElementById('chat-form');
-    if (chatForm) {
-        chatForm.addEventListener('submit', function(event) {
-            event.preventDefault();
-            webAuthn.sendMessage();
-        });
-    }
-    
-    // Add custom CSS styles for user ID display
+    // Add custom CSS styles for WebAuthn elements
     const style = document.createElement('style');
     style.textContent = `
         .user-id-display {
             font-size: 0.9em;
             margin: 5px 0;
             color: #666;
+            background-color: #f5f5f5;
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
         }
         .user-id-value {
             font-weight: bold;
@@ -941,9 +1032,13 @@ document.addEventListener('DOMContentLoaded', function() {
         .button:hover {
             opacity: 0.9;
         }
+        .debug-button {
+            display: block;
+            width: 100%;
+        }
     `;
     document.head.appendChild(style);
     
-    // Initialize
-    webAuthn.checkAuthStatus();
+    // Initialize WebAuthn client
+    webAuthn.init();
 });
