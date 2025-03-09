@@ -646,14 +646,41 @@ const webAuthn = {
             
             // Display user is authenticated along with their ID and username cycling button
             const displayUserId = userId ? userId.substring(0, 8) + '...' : 'Unknown';
-            authSection.innerHTML = `
-                <p>You are authenticated!</p>
-                <div class="user-info">
-                    <p class="user-id-display">Your ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></p>
-                    <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
-                </div>
-                <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
-            `;
+            
+            // Get current username from server
+            fetch(this.getEndpointPath('auth_status'), {
+                method: 'GET',
+                credentials: 'include'
+            })
+            .then(response => response.json())
+            .then(data => {
+                const username = data.username || 'Anonymous';
+                authSection.innerHTML = `
+                    <p>You are authenticated!</p>
+                    <div class="user-info">
+                        <p class="user-info-display">
+                            <span class="username-display">Username: <span class="username-value">${username}</span></span>
+                            <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
+                        </p>
+                        <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                    </div>
+                    <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                `;
+            })
+            .catch(error => {
+                this.logError('Error fetching username:', error);
+                // Fallback to just showing ID if username fetch fails
+                authSection.innerHTML = `
+                    <p>You are authenticated!</p>
+                    <div class="user-info">
+                        <p class="user-info-display">
+                            <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
+                        </p>
+                        <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                    </div>
+                    <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                `;
+            });
             
             // Show only the message input interface
             if (chatForm) chatForm.style.display = 'flex';
@@ -1063,14 +1090,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add custom CSS styles for WebAuthn elements
     const style = document.createElement('style');
     style.textContent = `
-        .user-id-display {
+        .user-info-display {
             font-size: 0.9em;
             margin: 5px 0;
             color: #666;
             background-color: #f5f5f5;
-            padding: 5px 10px;
+            padding: 8px 12px;
             border-radius: 4px;
-            display: inline-block;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        .username-display, .user-id-display {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .username-value {
+            font-weight: bold;
+            color: #2196F3;
         }
         .user-id-value {
             font-weight: bold;

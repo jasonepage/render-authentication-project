@@ -730,15 +730,29 @@ def webauthn_auth_status():
     
     is_authenticated = session.get('authenticated', False)
     user_id = session.get('user_id', None) if is_authenticated else None
+    username = None
     
-    if is_authenticated:
+    if is_authenticated and user_id:
         print(f"✅ User is authenticated: {user_id}")
+        try:
+            # Get username from database
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT username FROM security_keys WHERE user_id = ?", (user_id,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            username = result[0] if result and result[0] else f"User-{user_id[:6]}"
+        except Exception as e:
+            print(f"Error fetching username: {e}")
+            username = f"User-{user_id[:6]}"
     else:
         print("❌ User is not authenticated")
     
     return jsonify({
         "authenticated": is_authenticated,
-        "userId": user_id
+        "userId": user_id,
+        "username": username
     })
 
 # ==========================================
