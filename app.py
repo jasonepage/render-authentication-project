@@ -868,22 +868,13 @@ def serve_chat():
 @app.route('/<path:path>')
 def serve_static(path):
     """Serve static files"""
-    return send_from_directory('static', path)
-
-@app.route('/styles.css')
-def serve_css():
-    """Serve CSS file"""
-    return send_from_directory('static', 'styles.css')
-
-@app.route('/webauthn.js')
-def serve_webauthn_js():
-    """Serve WebAuthn JavaScript file"""
-    return send_from_directory('static', 'webauthn.js')
-
-@app.route('/chat.js')
-def serve_chat_js():
-    """Serve chat JavaScript file"""
-    return send_from_directory('static', 'chat.js')
+    try:
+        print(f"\n⭐ SERVING STATIC FILE: {path} ⭐")
+        return send_from_directory('static', path)
+    except Exception as e:
+        print(f"Static File Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 # ==========================================
 # Main application entry point
