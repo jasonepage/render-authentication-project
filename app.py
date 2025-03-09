@@ -681,7 +681,7 @@ def verify_authenticator_signature(public_key_data, client_data_hash, authentica
         
         # Convert the stored key to a format we can use
         public_key = serialization.load_pem_public_key(
-            stored_key['attestation']['publicKey'].encode()
+            stored_key['publicKey'].encode()
         )
         
         # Verify the signature
@@ -696,6 +696,7 @@ def verify_authenticator_signature(public_key_data, client_data_hash, authentica
             return False
     except Exception as e:
         print(f"Signature verification error: {str(e)}")
+        print(traceback.format_exc())  # Add stack trace for better debugging
         return False
 
 @app.route('/login_complete', methods=['POST'])
