@@ -1061,6 +1061,11 @@ def serve_chat():
     """Serve the chat application HTML"""
     return render_template('index.html')
 
+@app.route('/info')
+def serve_info():
+    """Serve the info page with documentation about the chat system."""
+    return render_template('info.html')
+
 @app.route('/<path:path>')
 def serve_static(path):
     """Serve static files"""
