@@ -10,12 +10,12 @@ const webAuthnCore = {
         debugMode: true,
         server: window.location.origin,
         endpoints: {
-            registerOptions: '/register_options',
-            registerComplete: '/register_complete',
-            loginOptions: '/login_options',
-            loginComplete: '/login_complete',
-            logout: '/logout',
-            authStatus: '/auth_status'
+            registerOptions: 'register_options',
+            registerComplete: 'register_complete',
+            loginOptions: 'login_options',
+            loginComplete: 'login_complete',
+            logout: 'logout',
+            authStatus: 'auth_status'
         }
     },
     
@@ -31,7 +31,9 @@ const webAuthnCore = {
     
     // Simplified endpoint path function
     getEndpointPath: function(endpoint) {
-        return this.config.endpoints[endpoint] || `/${endpoint}`;
+        const path = this.config.endpoints[endpoint] || endpoint;
+        // Ensure path starts with a slash
+        return path.startsWith('/') ? path : `/${path}`;
     },
     
     // Enhanced logging with timestamps

@@ -32,13 +32,23 @@ const webAuthnLogin = {
         
         // Get login options from server
         fetch(webAuthnCore.getEndpointPath('loginOptions'), {
-            method: 'GET',
+            method: 'POST',
             credentials: 'same-origin'
         })
         .then(response => {
             if (!response.ok) {
-                return response.json().then(data => {
-                    throw new Error(data.error || 'Failed to get login options');
+                if (response.status === 404) {
+                    throw new Error(`Endpoint not found: ${webAuthnCore.getEndpointPath('loginOptions')}`);
+                }
+                return response.text().then(text => {
+                    try {
+                        // Try to parse as JSON
+                        const data = JSON.parse(text);
+                        throw new Error(data.error || `Server error: ${response.status}`);
+                    } catch (e) {
+                        // If not valid JSON, use the raw text
+                        throw new Error(`Server error: ${response.status} - ${text}`);
+                    }
                 });
             }
             return response.json();
