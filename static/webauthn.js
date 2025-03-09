@@ -1,4 +1,12 @@
 /**
+ * @file webauthn.js
+ * @author Chris Becker, Jake McDowell, Jason Page
+ * @date March 8, 2024
+ * @description Core WebAuthn functionality for FIDO2 Chat System
+ *              Handles registration, authentication, and key management
+ */
+
+/**
  * WebAuthn Client Handler v1.6.0
  * Optimized for cross-platform FIDO2 security key authentication with improved debugging
  */
@@ -636,11 +644,14 @@ const webAuthn = {
             // Store userId for later use
             this.currentUserId = userId;
             
-            // Display user is authenticated along with their ID
+            // Display user is authenticated along with their ID and username cycling button
             const displayUserId = userId ? userId.substring(0, 8) + '...' : 'Unknown';
             authSection.innerHTML = `
                 <p>You are authenticated!</p>
-                <p class="user-id-display">Your User ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></p>
+                <div class="user-info">
+                    <p class="user-id-display">Your User ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></p>
+                    <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
+                </div>
                 <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
             `;
             
@@ -681,6 +692,60 @@ const webAuthn = {
             // Dispatch event that user logged out
             document.dispatchEvent(new CustomEvent('userLoggedOut'));
         }
+    },
+
+    // Cycle to a new random username
+    cycleUsername: function() {
+        this.log('Cycling username...');
+        
+        const cycleButton = document.querySelector('.cycle-username-button');
+        if (cycleButton) {
+            cycleButton.disabled = true;
+            cycleButton.textContent = '🎲 Changing...';
+        }
+        
+        fetch(this.getEndpointPath('cycle_username'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`Failed to cycle username (${response.status}): ${text}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log('Username updated successfully:', result);
+            
+            // Show a fun notification
+            const notification = document.createElement('div');
+            notification.className = 'username-notification';
+            notification.textContent = `Your new username is: ${result.username}`;
+            document.body.appendChild(notification);
+            
+            // Remove notification after 3 seconds
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+            
+            // Immediately load messages to show the new username
+            this.loadMessages();
+        })
+        .catch(error => {
+            this.logError('Error cycling username:', error);
+            alert(`Failed to change username: ${error.message}`);
+        })
+        .finally(() => {
+            if (cycleButton) {
+                cycleButton.disabled = false;
+                cycleButton.textContent = '🎲 New Random Username';
+            }
+        });
     },
 
     // Load messages from the server
@@ -1035,6 +1100,47 @@ document.addEventListener('DOMContentLoaded', function() {
         .debug-button {
             display: block;
             width: 100%;
+        }
+        .user-info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        .cycle-username-button {
+            background-color: #6c757d;
+            margin-top: 5px;
+            font-size: 14px;
+            padding: 6px 12px;
+            transition: all 0.3s ease;
+        }
+        .cycle-username-button:hover {
+            background-color: #5a6268;
+            transform: scale(1.02);
+        }
+        .cycle-username-button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+        .username-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #28a745;
+            color: white;
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 2.7s;
+            z-index: 1000;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
         }
     `;
     document.head.appendChild(style);

@@ -1,3 +1,10 @@
+"""
+# Author(s): Chris Becker, Jake McDowell, Jason Page
+# Date: March 8, 2024
+# Description: FIDO2/WebAuthn Chat System - Main Flask Application
+#             Handles authentication, chat functionality, and database operations
+"""
+
 from flask import Flask, jsonify, request, session, send_from_directory
 import os
 import json
@@ -11,12 +18,25 @@ import hashlib
 import cbor2
 from functools import wraps
 import platform
+import random
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
+
+# Fun usernames list - mix of fictional characters and celebrities
+PRESET_USERNAMES = [
+    "Iron Man", "Black Widow", "Thor", "Spider-Man", "Captain America",
+    "Wonder Woman", "Batman", "Superman", "Black Panther", "Doctor Strange",
+    "Darth Vader", "Luke Skywalker", "Princess Leia", "Han Solo", "Obi-Wan",
+    "Harry Potter", "Hermione", "Ron Weasley", "Dumbledore", "Gandalf",
+    "Neo", "Trinity", "Morpheus", "Jack Sparrow", "Indiana Jones",
+    "Mario", "Luigi", "Princess Peach", "Link", "Zelda",
+    "Sonic", "Pikachu", "Samus", "Master Chief", "Kratos",
+    "Leonardo", "Michelangelo", "Raphael", "Donatello", "Yoda"
+]
 
 # In-memory cache for rate limiting
 cache = {}
@@ -76,7 +96,8 @@ def init_db():
         attestation_hash TEXT,
         combined_key_hash TEXT,
         resident_key BOOLEAN,
-        created_at TIMESTAMP NOT NULL
+        created_at TIMESTAMP NOT NULL,
+        username TEXT
     )
     ''')
     
@@ -847,12 +868,57 @@ def cleanup_credentials():
         conn.close()
         
         return jsonify({
+            
             "status": "success",
             "message": f"Deleted {deleted_count} credentials"
         })
         
     except Exception as e:
         print(f"Cleanup Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/cycle_username', methods=['POST'])
+def cycle_username():
+    """Cycle to a new random username from the preset list"""
+    print("\n=== USERNAME CYCLE REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    user_id = session.get('user_id')
+    if not user_id:
+        print("❌ No user ID in session")
+        return jsonify({"error": "No user ID found"}), 400
+    
+    try:
+        # Get a random username from the preset list
+        new_username = random.choice(PRESET_USERNAMES)
+        print(f"Selected new username: {new_username}")
+        
+        # Update the username in the database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE security_keys 
+            SET username = ? 
+            WHERE user_id = ?
+        """, (new_username, user_id))
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Username updated successfully for user {user_id}")
+        return jsonify({
+            "status": "success",
+            "username": new_username
+        })
+        
+    except Exception as e:
+        print(f"❌ Error updating username: {e}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 

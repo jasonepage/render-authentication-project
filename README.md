@@ -1,21 +1,23 @@
 # FIDO2 Chat System
 
-A secure chat application that uses WebAuthn/FIDO2 for authentication.
+**Author(s)**: Chris Becker, Jake McDowell, Jason Page  
+**Date**: March 8, 2024  
+**Description**: A secure chat application that uses WebAuthn/FIDO2 for authentication.
 
 ## Core Requirements
 
 1. **One Physical Key = One Account**
-   - Each physical security key must map to exactly one user account
-   - This mapping must persist across different devices (e.g., a key used on both a laptop and phone should access the same account)
-   - The system must prevent creating multiple accounts with the same physical key
+   - Each physical security key maps to exactly one user account
+   - This mapping persists across different devices (e.g., a key used on both a laptop and phone accesses the same account)
+   - The system prevents creating multiple accounts with the same physical key
 
 2. **Cross-Device Authentication**
-   - Users must be able to authenticate on any device using their security key
-   - The system should recognize the same physical key regardless of the device it's used on
+   - Users can authenticate on any device using their security key
+   - The system recognizes the same physical key regardless of the device it's used on
 
-3. **Username Management**
-   - Users can set and change their username via chat commands
+3. **Username System**
    - Initial username is automatically generated based on user ID
+   - Username change functionality planned for future implementation
 
 4. **Security Requirements**
    - No passwords stored or transmitted
@@ -37,27 +39,100 @@ A secure chat application that uses WebAuthn/FIDO2 for authentication.
    - System matches the credential to the stored user account
    - System supports authenticating with the same key across different devices
 
+### Key Identification Strategy
+
+The system uses multiple identifiers to recognize the same physical key across different devices:
+
+1. **AAGUID (Authenticator Attestation Global Unique Identifier)**
+   - Identifies the model of the authenticator
+   - Same for all keys of the same model
+
+2. **Attestation Hash**
+   - Hash of the attestation object
+   - Provides a more unique identifier for the physical key
+
+3. **Combined Hash**
+   - Hash that combines AAGUID and attestation information
+   - Provides an even more unique identifier
+
+4. **Key Fingerprints Table**
+   - Stores associations between AAGUIDs and attestation hashes
+   - Allows the system to learn and recognize the same physical key used on different devices
+
 ### Database Schema
 
-The system stores the following information for each security key:
-- Credential ID
-- User ID
-- Username
-- Public key data
-- Attestation hash
-- Combined hash
-- AAGUID (Authenticator Attestation Global Unique Identifier)
-- Resident key flag
+The system uses SQLite with the following tables:
 
-## Development Notes
+#### Security Keys Table
+- `id`: Primary key
+- `credential_id`: WebAuthn credential ID
+- `user_id`: User identifier
+- `username`: User's display name
+- `public_key`: WebAuthn public key data
+- `created_at`: Timestamp
+- `attestation_hash`: Hash of the attestation object
+- `combined_key_hash`: Combined hash for key identification
+- `aaguid`: Authenticator Attestation Global Unique Identifier
+- `resident_key`: Flag indicating if this is a resident key
 
-- The system is designed to work with all FIDO2-compliant security keys
-- Special handling is implemented to ensure one physical key maps to one account
-- The system uses resident keys (discoverable credentials) to enable cross-device functionality
+#### Key Fingerprints Table
+- `id`: Primary key
+- `aaguid`: Authenticator Attestation Global Unique Identifier
+- `attestation_hash`: Hash of the attestation object
+- `user_id`: Associated user identifier
+- `created_at`: Timestamp
+
+#### Messages Table
+- `id`: Primary key
+- `user_id`: User identifier
+- `username`: User's display name
+- `message`: Message content
+- `created_at`: Timestamp
+
+## Frontend Architecture
+
+The frontend JavaScript is organized into modular components for better maintainability:
+
+### Core Modules
+
+1. **webauthn-core.js**
+   - Core functionality and configuration
+   - Base64 encoding/decoding utilities
+   - Logging functions
+   - WebAuthn support detection
+
+2. **webauthn-register.js**
+   - Handles the registration process
+   - Prepares registration options
+   - Processes credential creation
+   - Sends registration data to server
+
+3. **webauthn-login.js**
+   - Handles the login process
+   - Prepares login options
+   - Processes credential authentication
+   - Sends login data to server
+   - Handles logout
+
+4. **webauthn-ui.js**
+   - Manages the user interface
+   - Updates authentication status display
+   - Shows messages and errors
+   - Handles UI state changes
+
+5. **webauthn-main.js**
+   - Initializes all modules
+   - Checks WebAuthn support
+   - Coordinates module interactions
+
+6. **chat.js**
+   - Handles chat functionality
+   - Sends and receives messages
+   - Updates message display
 
 ## Admin Features
 
-- `/debug_all` - View all registered credentials
+- `/debug_all` - View all registered credentials, fingerprints, and messages
 - `/force_cleanup` - Reset the database (for testing purposes)
 - `/cleanup_credentials` - Remove credentials for the current user
 
@@ -72,103 +147,52 @@ When testing the application:
 ## Compatibility
 
 - Works with all FIDO2-compliant security keys
+- Special handling for different key types (YubiKey, Feitian, Thales/Gemalto, etc.)
+- Fallback mechanisms for keys with limited capabilities
 - Requires browsers with WebAuthn support
 - Tested with Chrome, Safari, and Firefox
-
-## Features
-
-- **Passwordless Authentication**: Users authenticate using FIDO2/WebAuthn compliant devices (security keys, TouchID, Windows Hello, etc.)
-- **Secure Chat**: Only authenticated users can send messages
-- **Username Customization**: Users can set and change their display names with /username
-
-## Technology Stack
-
-- **Backend**: Flask (Python)
-- **Frontend**: JavaScript, HTML, CSS, Render 
-- **Authentication**: FIDO2/WebAuthn
-- **Database**: SQLite
-
-## Authentication Flow
-
-### Registration Process
-
-1. **Registration Initiation**:
-   - User clicks "Register" button
-   - Browser makes request to `/register_options`
-   - Server generates a random challenge and user ID
-   - Server returns registration options
-
-2. **Authenticator Interaction**:
-   - Browser prompts user to interact with authenticator
-   - Authenticator creates a public/private key pair
-   - Public key and credential ID are sent to the server
-
-3. **Registration Completion**:
-   - Server receives credential data at `/register_complete`
-   - Credential ID, public key, and initial username are stored in the database
-   - User is now registered
-
-### Login Process
-
-1. **Login Initiation**:
-   - User clicks "Login" button
-   - Browser requests login options from `/login_options`
-   - Server generates a challenge and provides a list of the user's registered credentials
-
-2. **Authentication**:
-   - Browser prompts user to interact with authenticator
-   - Authenticator uses private key to sign the challenge
-   - Signature and credential ID are sent to the server
-
-3. **Login Completion**:
-   - Server verifies the signature at `/login_complete` using the stored public key
-   - On success, the server sets authenticated session
-   - User is now logged in and can access the chat
-
-## Chat Features
-
-- View messages without authentication
-- Send messages only when authenticated
-- Change username with the command: `/username [new name]`
-- System messages for events (username changes, etc.)
 
 ## API Endpoints
 
 ### Authentication Endpoints
-- `/register_options` - Get options for a new registration
-- `/register_complete` - Complete registration with authenticator data
-- `/login_options` - Get options for login
-- `/login_complete` - Complete login with authenticator response
-- `/logout` - End the user's session
-- `/auth_status` - Check current authentication status
+- `/register_options` (POST) - Get options for a new registration
+- `/register_complete` (POST) - Complete registration with authenticator data
+- `/login_options` (POST) - Get options for login
+- `/login_complete` (POST) - Complete login with authenticator response
+- `/logout` (POST) - End the user's session
+- `/auth_status` (GET) - Check current authentication status
 
 ### Chat Endpoints
-- `/get_messages` - Retrieve chat messages
-- `/send_message` - Send a new message (requires authentication)
+- `/get_messages` (GET) - Retrieve chat messages
+- `/send_message` (POST) - Send a new message (requires authentication)
 
 ### Admin Endpoints
-- `/debug_all` - View debugging information about registered credentials
-- `/cleanup_credentials` - Remove all registered credentials
+- `/debug_all` (GET) - View debugging information
+- `/force_cleanup` (GET) - Reset the database
+- `/cleanup_credentials` (POST) - Remove credentials for the current user
 
 ### Static Content
-- `/` or `/chat` - Main application
-- Various static asset endpoints
+- `/` - Main application
+- `/chat` - Chat interface
+- `/<path>` - Static files (JS, CSS, etc.)
 
-## Security Features
+## Error Handling
 
-- CSRF Protection with session cookies
-- Rate limiting on endpoints
-- Secure cookies for authentication
-- Input validation
-- Error handling with appropriate responses
+The application includes comprehensive error handling:
+
+- Client-side validation of WebAuthn responses
+- Detailed error messages for debugging
+- Graceful fallbacks for unsupported browsers
+- HTTP error handling with meaningful messages
+- Database error recovery
 
 ## Local Development
 
 1. **Setup**:
    ```bash
    # Clone the repository
-   git clone [repository URL]
-   cd [repository directory]
+   git clone https://github.com/yourusername/render-authentication-project.git
+   cd render-authentication-project
    
    # Set up virtual environment
    python -m venv venv
@@ -184,34 +208,42 @@ When testing the application:
    ```
    Access the application at http://localhost:5000
 
-## Testing
-
-The project includes a comprehensive test suite:
-
-```bash
-# Run tests
-./run_tests.sh
-```
-
-The tests cover:
-- Authentication flow
-- Chat functionality
-- Error handling
-- Admin functionality
-
 ## Deployment
 
-This application is ready to deploy on Render.com:
+This application is deployed on Render.com:
 
-1. Create a new Web Service on Render
-2. Link your GitHub repository
-3. Use the following settings:
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `gunicorn app:app`
-   - Environment Variables: 
-     - `SECRET_KEY`: a secure random string
-     - `DB_PATH`: database path (usually `/opt/render/webauthn.db`)
+1. Environment Variables:
+   - `SECRET_KEY`: Secure random string for session management
+   - `DB_PATH`: Database path (usually `/opt/render/webauthn.db`)
 
+2. Build Command:
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. Start Command:
+   ```
+   gunicorn app:app
+   ```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **404 Errors on Registration/Login**
+   - Ensure the server is running
+   - Check that the endpoint paths match in both client and server code
+   - Verify that the HTTP methods (GET/POST) match the server expectations
+
+2. **Cross-Device Authentication Issues**
+   - Ensure the security key supports resident keys
+   - Check that AAGUID extraction is working correctly
+   - Verify the key fingerprints table is being populated
+
+3. **Browser Compatibility**
+   - Ensure the browser supports WebAuthn
+   - Check for browser-specific WebAuthn implementation differences
+   - Verify that the security key is compatible with the browser
 
 ## Authors
 

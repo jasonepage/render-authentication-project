@@ -1,3 +1,11 @@
+/**
+ * @file chat.js
+ * @author Chris Becker, Jake McDowell, Jason Page
+ * @date March 8, 2024
+ * @description Chat functionality for FIDO2 Chat System
+ *              Handles message sending, receiving, and UI updates
+ */
+
 // Chat functionality
 const chat = {
     // Server URL (same as in webauthn.js)
