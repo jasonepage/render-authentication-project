@@ -32,3 +32,4 @@ ENV/
 *.db
 
 .github
+__pycache__/

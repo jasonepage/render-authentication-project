@@ -1,8 +1,6 @@
 /**
+ * WebAuthn Client Handler v1.5.0
  * Optimized for cross-platform FIDO2 security key authentication
- * 
- * Author(s): Chris Becker, Jake McDowell, Jason Page
- * Version: 1.0
  */
 const webAuthn = {
     version: '1.5.0',
@@ -223,257 +221,337 @@ const webAuthn = {
     // Register a new security key
     registerKey: function() {
         this.log('Starting registration process');
+        console.log('DEBUG - Browser details:', {
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            vendor: navigator.vendor,
+            webAuthnSupport: !!navigator.credentials && !!navigator.credentials.create
+        });
         
-        // Show a message about security key
-        alert('Please insert your security key and follow the browser instructions. For best security, please use a physical security key like YubiKey.');
+        this.showModal('Please insert your security key and follow the browser instructions...');
+
+        const isIOS = this.isIOS();
+        const isMac = /Mac/.test(navigator.platform);
         
+        if (isIOS) {
+            this.log('iOS device detected, using iOS-specific settings');
+        }
+        
+        if (isMac) {
+            this.log('Mac device detected, using Mac-specific settings');
+        }
+
         const registerOptionsUrl = this.getEndpointPath('register_options');
         this.log(`Using registration options URL: ${registerOptionsUrl}`);
 
-        // Fetch registration options
-        fetch(registerOptionsUrl, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json'
+        // Use debugFetch instead of regular fetch
+        this.debugFetch(
+            registerOptionsUrl, 
+            {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ timestamp: Date.now() })
             },
-            body: JSON.stringify({ timestamp: Date.now() })
-        })
-        .then(response => {
-            if (!response.ok) {
-                return response.text().then(text => {
-                    this.logError(`Error response: ${text}`);
-                    throw new Error(`Failed to get registration options (${response.status}): ${text}`);
-                });
+            response => {
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        this.logError(`Error response: ${text}`);
+                        throw new Error(`Failed to get registration options (${response.status}): ${text}`);
+                    });
+                }
+                return response.json();
             }
-            return response.json();
-        })
+        )
         .then(options => {
             this.log(`Received registration options:`, options);
+            console.log("DEBUG - Raw registration options:", JSON.parse(JSON.stringify(options)));
             
+            // Debug the challenge format specifically
+            console.log("DEBUG - Challenge details:", {
+                value: options.challenge,
+                type: typeof options.challenge,
+                length: options.challenge?.length || 0
+            });
+            
+            // Debug the user.id format
+            if (options.user && options.user.id) {
+                console.log("DEBUG - User ID details:", {
+                    value: options.user.id,
+                    type: typeof options.user.id,
+                    length: options.user.id?.length || 0
+                });
+            }
+            
+            // Enhanced error handling and logging for challenge conversion
             try {
-                // Convert base64url strings to ArrayBuffer as required by the WebAuthn API
-                options.challenge = this.base64urlToArrayBuffer(options.challenge);
-                options.user.id = this.base64urlToArrayBuffer(options.user.id);
-                
-                // Format excludeCredentials if they exist
-                if (options.excludeCredentials && Array.isArray(options.excludeCredentials)) {
-                    options.excludeCredentials = options.excludeCredentials.map(cred => {
-                        return {
-                            ...cred,
-                            id: this.base64urlToArrayBuffer(cred.id)
-                        };
-                    });
+                // Make sure challenge is a string before conversion
+                if (typeof options.challenge !== 'string') {
+                    this.logWarn(`Challenge is not a string! Type: ${typeof options.challenge}`);
+                    options.challenge = String(options.challenge);
                 }
                 
-                // Request the authenticator to create a new credential
-                return navigator.credentials.create({
-                    publicKey: options
-                });
-            } catch (error) {
-                this.logError('Error preparing registration options:', error);
-                alert('Error preparing registration: ' + error.message);
-                throw error;
+                this.log(`Converting challenge: ${options.challenge}`);
+                options.challenge = this.base64urlToArrayBuffer(options.challenge);
+                this.log(`Challenge converted successfully`);
+            } catch (e) {
+                this.logError(`Failed to convert challenge: ${e.message}`, e);
+                throw new Error(`Challenge conversion failed: ${e.message}`);
             }
+            
+            // Enhanced handling for user.id
+            if (options.user && options.user.id) {
+                try {
+                    if (typeof options.user.id !== 'string') {
+                        this.logWarn(`User ID is not a string! Type: ${typeof options.user.id}`);
+                        options.user.id = String(options.user.id);
+                    }
+                    
+                    this.log('Converting user ID:', options.user.id);
+                    options.user.id = this.base64urlToArrayBuffer(options.user.id);
+                    this.log('User ID converted successfully');
+                } catch (e) {
+                    this.logError(`Failed to convert user.id: ${e.message}`, e);
+                    throw new Error(`User ID conversion failed: ${e.message}`);
+                }
+            }
+            
+            if (options.excludeCredentials) {
+                for (let i = 0; i < options.excludeCredentials.length; i++) {
+                    options.excludeCredentials[i].id = this.base64urlToArrayBuffer(options.excludeCredentials[i].id);
+                }
+            }
+            
+            // Mac-specific adjustments
+            if (isMac) {
+                // macOS sometimes needs specific settings
+                this.log('Applying Mac-specific adjustments');
+                options.authenticatorSelection = options.authenticatorSelection || {};
+                // Let's not be too restrictive on Mac
+                options.authenticatorSelection.requireResidentKey = false;
+                options.authenticatorSelection.userVerification = 'discouraged';
+                
+                this.log('Adjusted options for Mac compatibility', options.authenticatorSelection);
+            }
+            
+            this.log('Converted all fields, final options:', options);
+            
+            // Step 2: Create credentials using WebAuthn API
+            console.log("DEBUG - Calling navigator.credentials.create with:", JSON.parse(JSON.stringify({publicKey: options})));
+            return navigator.credentials.create({
+                publicKey: options
+            }).catch(err => {
+                this.logError('Credential creation failed', err);
+                console.error('ERROR DETAILS:', {
+                    name: err.name,
+                    message: err.message,
+                    code: err.code,
+                    stack: err.stack
+                });
+                throw err;
+            });
         })
         .then(credential => {
-            if (!credential) {
-                this.log('No credential returned');
-                return;
-            }
+            this.log('Credential created successfully, preparing data for server');
+            console.log("DEBUG - Raw credential object:", credential);
             
-            this.log('Credential created successfully');
-            
+            // Prepare the credential data to send to server
             try {
-                // Prepare the credential data to send to the server
-                const credentialData = {
-                    id: credential.id,
-                    type: credential.type,
-                    response: {
-                        clientDataJSON: this.arrayBufferToBase64url(credential.response.clientDataJSON),
-                        attestationObject: this.arrayBufferToBase64url(credential.response.attestationObject)
-                    }
-                };
+                const credentialId = this.arrayBufferToBase64url(credential.rawId);
+                const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
+                const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
                 
-                // Send the credential data to the server
-                return fetch(this.getEndpointPath('register_complete'), {
+                console.log("DEBUG - Encoded credential data:", {
+                    credentialId: credentialId,
+                    clientDataJSON: clientDataJSON?.substring(0, 50) + "...",
+                    attestationObjectPreview: attestationObject?.substring(0, 50) + "..."
+                });
+                
+                const registerCompleteUrl = this.getEndpointPath('register_complete');
+                this.log(`Using register complete URL: ${registerCompleteUrl}`);
+                
+                // Step 3: Send credential data to server
+                return fetch(registerCompleteUrl, {
                     method: 'POST',
                     credentials: 'include',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(credentialData)
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        return response.text().then(text => {
-                            throw new Error(`Registration failed (${response.status}): ${text}`);
-                        });
-                    }
-                    return response.json();
+                    body: JSON.stringify({
+                        id: credentialId,
+                        rawId: credentialId,
+                        type: credential.type,
+                        response: {
+                            clientDataJSON: clientDataJSON,
+                            attestationObject: attestationObject
+                        }
+                    })
                 });
             } catch (error) {
-                this.logError('Error processing credential:', error);
-                alert('Error processing credential: ' + error.message);
+                this.logError("Failed to process credential for submission", error);
                 throw error;
             }
         })
-        .then(result => {
-            if (!result) return;
-            
-            this.log('Registration result:', result);
-            
-            // Check if this was an existing account
-            if (result.existing_account) {
-                alert('This security key is already registered with an existing account. You have been logged in to that account.');
-            } else {
-                alert('Registration successful! You are now logged in.');
-            }
-            
-            // Update state
-            this.isAuthenticated = true;
-            this.userId = result.user_id;
-            this.username = result.username;
-            
-            // Update UI
-            this.updateUI(true, result.user_id, result.username);
-            
-            // Reload the page after a short delay
-            setTimeout(() => {
-                window.location.reload();
-            }, 1000);
-        })
-        .catch(error => {
-            this.logError('Registration error:', error);
-            
-            if (error.name === 'NotAllowedError') {
-                alert('Registration was cancelled or timed out. Please try again.');
-            } else if (error.name === 'NotSupportedError') {
-                alert('Your device doesn\'t support the required security key type. Please try a physical security key.');
-            } else {
-                alert('Registration failed: ' + error.message);
-            }
-        });
-    },
-
-    // Login with a security key
-    login: function() {
-        this.log('Starting login process');
-        
-        // Simple alert instead of modal
-        alert('Please insert your security key to log in');
-        
-        // Fetch login options
-        fetch(this.getEndpointPath('login_options'), {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ timestamp: Date.now() })
-        })
         .then(response => {
+            this.log(`Response status: ${response.status}`);
             if (!response.ok) {
                 return response.text().then(text => {
-                    this.logError(`Error response: ${text}`);
-                    throw new Error(`Failed to get login options (${response.status}): ${text}`);
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to complete registration (${response.status}): ${text}`);
                 });
             }
             return response.json();
         })
-        .then(options => {
-            this.log('Login options received:', options);
-            
-            try {
-                // Convert challenge from base64url to ArrayBuffer
-                options.challenge = this.base64urlToArrayBuffer(options.challenge);
-                
-                // Convert credential IDs from base64url to ArrayBuffer
-                if (options.allowCredentials) {
-                    options.allowCredentials = options.allowCredentials.map(cred => {
-                        return {
-                            ...cred,
-                            id: this.base64urlToArrayBuffer(cred.id)
-                        };
-                    });
-                }
-                
-                // Request the authenticator to get the credential
-                return navigator.credentials.get({
-                    publicKey: options
-                });
-            } catch (error) {
-                this.logError('Error preparing login options:', error);
-                alert('Error preparing login: ' + error.message);
-                throw error;
-            }
-        })
-        .then(assertion => {
-            if (!assertion) {
-                this.log('No assertion returned');
-                return;
-            }
-            
-            this.log('Assertion received, verifying with server');
-            
-            try {
-                // Prepare the assertion data to send to the server
-                const assertionData = {
-                    id: assertion.id,
-                    type: assertion.type,
-                    response: {
-                        clientDataJSON: this.arrayBufferToBase64url(assertion.response.clientDataJSON),
-                        authenticatorData: this.arrayBufferToBase64url(assertion.response.authenticatorData),
-                        signature: this.arrayBufferToBase64url(assertion.response.signature),
-                        userHandle: assertion.response.userHandle ? this.arrayBufferToBase64url(assertion.response.userHandle) : null
-                    }
-                };
-                
-                // Send the assertion to the server
-                return fetch(this.getEndpointPath('login_complete'), {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(assertionData)
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        return response.text().then(text => {
-                            throw new Error(`Login failed (${response.status}): ${text}`);
-                        });
-                    }
-                    return response.json();
-                });
-            } catch (error) {
-                this.logError('Error processing assertion:', error);
-                alert('Error processing credential: ' + error.message);
-                throw error;
-            }
-        })
         .then(result => {
-            if (!result) return;
+            this.log(`Registration complete, result: ${JSON.stringify(result)}`);
+            this.hideModal();
             
-            this.log('Login successful:', result);
-            alert('Login successful!');
+            // Update the UI to reflect the authenticated state
+            this.updateUI(true, result.userId);
             
-            // Reload the page to reflect the logged in state
-            setTimeout(() => {
-                window.location.reload();
-            }, 1000);
+            // Alert the user
+            alert('Security key registered successfully!');
         })
         .catch(error => {
-            this.logError('Login error:', error);
-            
-            if (error.name === 'NotAllowedError') {
-                alert('Login was cancelled or timed out. Please try again.');
-            } else if (error.name === 'NotSupportedError') {
-                alert('Your device doesn\'t support security keys. Please try a different device.');
-            } else {
-                alert('Login failed: ' + error.message);
-            }
+            this.log(`Registration error: ${error.message}`);
+            this.hideModal();
+            alert(`Registration failed: ${error.message}`);
         });
+        
+        return false; // Prevent form submission
+    },
+
+    // Login with a registered security key
+    loginWithKey: function() {
+        this.log('Starting login process');
+        this.showModal('Please insert your security key and follow the browser instructions...');
+
+        const isIOS = this.isIOS();
+        if (isIOS) {
+            this.log('iOS device detected, using iOS-specific login settings');
+        }
+
+        const loginOptionsUrl = this.getEndpointPath('login_options');
+        this.log(`Using login options URL: ${loginOptionsUrl}`);
+
+        // Step 1: Get login options from server
+        this.debugFetch(
+            loginOptionsUrl,
+            {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ timestamp: Date.now() })
+            },
+            response => {
+                if (!response.ok) {
+                    return response.text().then(text => {
+                        this.log(`Error response: ${text}`);
+                        throw new Error(`Failed to get login options (${response.status}): ${text}`);
+                    });
+                }
+                return response.json();
+            }
+        )
+        .then(options => {
+            this.log(`Received login options: ${JSON.stringify(options).substring(0, 100)}...`);
+            
+            // Convert base64url encoded values to ArrayBuffer
+            options.challenge = this.base64urlToArrayBuffer(options.challenge);
+            
+            if (options.allowCredentials) {
+                this.log(`Found ${options.allowCredentials.length} allowCredentials`);
+                for (let i = 0; i < options.allowCredentials.length; i++) {
+                    options.allowCredentials[i].id = this.base64urlToArrayBuffer(options.allowCredentials[i].id);
+                    this.log(`Converted credential ${i+1}: ${options.allowCredentials[i].id.byteLength} bytes`);
+                }
+            } else {
+                this.log('No allowCredentials found in options');
+            }
+            
+            // iOS-specific adjustments
+            if (isIOS) {
+                // For iOS, userVerification should be discouraged or preferred
+                options.userVerification = 'discouraged';
+                
+                // Ensure timeout is reasonable
+                options.timeout = 120000; // 2 minutes
+                
+                this.log('Adjusted options for iOS compatibility');
+            }
+            
+            this.log('Converted challenge and credential IDs to ArrayBuffer, calling navigator.credentials.get()');
+            
+            // Step 2: Get credentials using WebAuthn API
+            return navigator.credentials.get({
+                publicKey: options
+            });
+        })
+        .then(assertion => {
+            this.log('Assertion received successfully, preparing data for server');
+            
+            // Prepare the assertion data to send to server
+            const credentialId = this.arrayBufferToBase64url(assertion.rawId);
+            const clientDataJSON = this.arrayBufferToBase64url(assertion.response.clientDataJSON);
+            const authenticatorData = this.arrayBufferToBase64url(assertion.response.authenticatorData);
+            const signature = this.arrayBufferToBase64url(assertion.response.signature);
+            
+            this.log(`Assertion credential ID: ${credentialId.substring(0, 20)}...`);
+
+            const loginCompleteUrl = this.getEndpointPath('login_complete');
+            this.log(`Using login complete URL: ${loginCompleteUrl}`);
+            
+            // Step 3: Send assertion to server
+            return fetch(loginCompleteUrl, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    id: credentialId,
+                    rawId: credentialId,
+                    type: assertion.type,
+                    response: {
+                        clientDataJSON: clientDataJSON,
+                        authenticatorData: authenticatorData,
+                        signature: signature,
+                        userHandle: assertion.response.userHandle ? this.arrayBufferToBase64url(assertion.response.userHandle) : null
+                    }
+                })
+            });
+        })
+        .then(response => {
+            this.log(`Response status: ${response.status}`);
+            if (!response.ok) {
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to complete login (${response.status}): ${text}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log(`Login complete, result: ${JSON.stringify(result)}`);
+            this.hideModal();
+            
+            // Update the UI to reflect the authenticated state
+            this.updateUI(true, result.userId);
+            
+            // Alert the user
+            alert('Login successful!');
+        })
+        .catch(error => {
+            this.log(`Login error: ${error.message}`);
+            this.hideModal();
+            alert(`Login failed: ${error.message}`);
+        });
+        
+        return false; // Prevent form submission
     },
 
     // Logout
@@ -514,7 +592,7 @@ const webAuthn = {
     },
 
     // Update UI based on authentication status
-    updateUI: function(isAuthenticated, userId, username) {
+    updateUI: function(isAuthenticated, userId) {
         this.log('Updating UI for authentication state:', isAuthenticated);
         
         const authSection = document.getElementById('auth-status');
@@ -544,8 +622,8 @@ const webAuthn = {
             authSection.innerHTML = `
                 <p>You are not authenticated.</p>
                 <div class="auth-buttons">
-                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register</button>
-                    <button onclick="webAuthn.login(); return false;" class="button login-button">Login</button>
+                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register Security Key</button>
+                    <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login</button>
                 </div>
             `;
             
@@ -618,24 +696,14 @@ const webAuthn = {
                 messageElement.classList.add('own-message');
             }
             
-            // Format the user ID for display (either "You" or username or first 8 chars)
-            let displayUser = isCurrentUser ? 'You' : (message.username || `User-${message.user.substring(0, 8)}`);
+            // Format the user ID for display (either "You" or first 8 chars)
+            let displayUser = isCurrentUser ? 'You' : message.user.substring(0, 8) + '...';
             
-            // Format time if available
-            let timeDisplay = '';
-            if (message.time) {
-                try {
-                    const date = new Date(message.time);
-                    timeDisplay = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                } catch (e) {
-                    this.logError('Error formatting time:', e);
-                }
-            }
-            
+            // Create message content
             messageElement.innerHTML = `
                 <span class="message-user">${displayUser}</span>
                 <span class="message-text">${this.escapeHtml(message.message)}</span>
-                <span class="message-time">${timeDisplay}</span>
+                <span class="message-time">${this.formatTime(message.time)}</span>
             `;
             
             messageList.appendChild(messageElement);
@@ -755,13 +823,11 @@ const webAuthn = {
             // Store the user ID for later use
             if (status.authenticated && status.userId) {
                 this.currentUserId = status.userId;
-                this.currentUsername = status.username;
             } else {
                 this.currentUserId = null;
-                this.currentUsername = null;
             }
             // Update the UI with the authentication status and user ID
-            this.updateUI(status.authenticated, status.userId, status.username);
+            this.updateUI(status.authenticated, status.userId);
             return status;
         })
         .catch(error => {
@@ -769,77 +835,6 @@ const webAuthn = {
             this.updateUI(false);
             return { authenticated: false };
         });
-    },
-    
-    // Add a simplified showCredentialHelp method
-    showCredentialHelp: function(message) {
-        this.log('Credential help message:', message);
-        // Just log the help message for now to avoid any errors
-        // No DOM manipulation that might cause errors
-    },
-
-    // Handle registration errors and check for existing credentials
-    handleRegistrationError: function(error) {
-        this.logError('Registration error:', error);
-        this.hideModal();
-        
-        // Check for specific error types that indicate an existing credential
-        const errorMessage = error.message || '';
-        const errorName = error.name || '';
-        
-        // Handle existing credential errors
-        const isExistingCredentialError = 
-            errorMessage.includes('already registered') || 
-            errorMessage.includes('excludeCredentials') ||
-            errorMessage.includes('credential already exists') ||
-            errorMessage.includes('The authenticator is already registered') ||
-            errorName === 'InvalidStateError';
-        
-        // Handle unsupported authenticator errors
-        const isUnsupportedAuthenticatorError =
-            errorMessage.includes('authenticator attachment') ||
-            errorMessage.includes('authenticator not supported') ||
-            errorMessage.includes('not supported by this device') ||
-            errorMessage.includes('not supported');
-        
-        // Handle user verification errors
-        const isUserVerificationError =
-            errorMessage.includes('user verification') ||
-            errorMessage.includes('verification failed');
-        
-        // Handle timeout or cancellation
-        const isTimeoutOrCancelled =
-            errorName === 'NotAllowedError' ||
-            errorMessage.includes('timeout') ||
-            errorMessage.includes('cancelled') ||
-            errorMessage.includes('canceled') ||
-            errorMessage.includes('aborted');
-        
-        if (isExistingCredentialError) {
-            this.log('Detected existing credential - redirecting to login flow');
-            // Show a helpful message to the user
-            alert('This authenticator is already registered. Proceeding to login...');
-            
-            // Short delay before switching to login
-            setTimeout(() => {
-                // Switch to login mode
-                this.login();
-            }, 2000);
-            
-            return;
-        } else if (isUnsupportedAuthenticatorError) {
-            alert('Your device doesn\'t support the required security key type. Please try a physical security key like YubiKey.');
-            return;
-        } else if (isUserVerificationError) {
-            alert('User verification failed. Please try again.');
-            return;
-        } else if (isTimeoutOrCancelled) {
-            alert('Registration was cancelled or timed out. Please try again.');
-            return;
-        }
-        
-        // Handle other registration errors
-        alert('Registration failed: ' + (error.message || 'Unknown error'));
     },
     
     // Initialize the application
@@ -901,17 +896,6 @@ const webAuthn = {
         }
         
         this.log('Initialization complete');
-    },
-
-    // Add these essential utility methods near the top of the webAuthn object
-    showMessage: function(message) {
-        this.log('Showing message:', message);
-        alert(message);
-    },
-
-    showError: function(error) {
-        this.logError('Showing error:', error);
-        alert('Error: ' + error);
     }
 };
 
