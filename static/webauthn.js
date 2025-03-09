@@ -649,18 +649,14 @@ const webAuthn = {
             authSection.innerHTML = `
                 <p>You are authenticated!</p>
                 <div class="user-info">
-                    <p class="user-id-display">Your User ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></p>
+                    <p class="user-id-display">Your ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></p>
                     <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
                 </div>
                 <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
             `;
             
-            // Show the message interface
-            if (messageList) messageList.style.display = 'block';
+            // Show only the message input interface
             if (chatForm) chatForm.style.display = 'flex';
-            
-            // Load messages
-            this.loadMessages();
             
             // Start polling for messages
             this.startMessagePolling();
@@ -679,12 +675,8 @@ const webAuthn = {
                 </div>
             `;
             
-            // Hide the message interface
-            if (messageList) messageList.style.display = 'none';
+            // Hide only the message input interface
             if (chatForm) chatForm.style.display = 'none';
-            
-            // Stop polling for messages
-            this.stopMessagePolling();
             
             // Clear current user ID
             this.currentUserId = null;
@@ -692,6 +684,10 @@ const webAuthn = {
             // Dispatch event that user logged out
             document.dispatchEvent(new CustomEvent('userLoggedOut'));
         }
+
+        // Always show message list and start polling
+        if (messageList) messageList.style.display = 'block';
+        this.loadMessages();
     },
 
     // Cycle to a new random username
@@ -795,7 +791,7 @@ const webAuthn = {
             // Show placeholder message
             const placeholder = document.createElement('div');
             placeholder.className = 'message message-system';
-            placeholder.textContent = 'No messages yet. Start chatting!';
+            placeholder.textContent = 'No messages yet. Login to start chatting!';
             container.appendChild(placeholder);
             return;
         }
@@ -813,13 +809,16 @@ const webAuthn = {
                 messageElement.classList.add('message-other');
             }
             
-            // Format the user ID for display (either "You" or first 8 chars)
-            let displayUser = isCurrentUser ? 'You' : message.user.substring(0, 8) + '...';
+            // Format the username for display
+            let displayName = message.username || 'Anonymous';
+            if (isCurrentUser) {
+                displayName += ' (You)';
+            }
             
             // Create message meta element
             const metaElement = document.createElement('div');
             metaElement.className = 'message-meta';
-            metaElement.textContent = `${displayUser} • ${this.formatTime(message.time)}`;
+            metaElement.textContent = `${displayName} • ${this.formatTime(message.time)}`;
             
             // Create message text
             const textElement = document.createElement('div');

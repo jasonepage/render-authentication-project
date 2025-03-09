@@ -338,8 +338,21 @@ def get_messages():
             conn.close()
             return jsonify([]), 200
         
-        c.execute("SELECT user_id, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT 50")
-        messages = [{"user": row[0], "message": row[1], "time": row[2]} for row in c.fetchall()]
+        # Join with security_keys table to get usernames
+        c.execute("""
+            SELECT m.user_id, m.message, m.timestamp, sk.username 
+            FROM messages m 
+            LEFT JOIN security_keys sk ON m.user_id = sk.user_id 
+            ORDER BY m.timestamp DESC LIMIT 50
+        """)
+        
+        messages = [{
+            "user": row[0],
+            "message": row[1],
+            "time": row[2],
+            "username": row[3] or f"User-{row[0][:6]}"  # Fallback to shortened user ID if no username
+        } for row in c.fetchall()]
+        
         conn.close()
         
         print(f"Retrieved {len(messages)} messages")
@@ -759,6 +772,11 @@ def send_message():
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
+        
+        # Get the user's current username
+        c.execute("SELECT username FROM security_keys WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        username = result[0] if result else f"User-{user_id[:6]}"
     
         c.execute("INSERT INTO messages (user_id, message) VALUES (?, ?)", 
                 (user_id, message))
