@@ -5,7 +5,7 @@
 #             Handles authentication, chat functionality, and database operations
 """
 
-from flask import Flask, jsonify, request, session, send_from_directory
+from flask import Flask, jsonify, request, session, send_from_directory, render_template
 import os
 import json
 import secrets
@@ -1059,7 +1059,7 @@ def cycle_username():
 @app.route('/chat')
 def serve_chat():
     """Serve the chat application HTML"""
-    return send_from_directory('static', 'index.html')
+    return render_template('index.html')
 
 @app.route('/<path:path>')
 def serve_static(path):
