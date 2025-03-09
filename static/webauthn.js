@@ -1112,8 +1112,16 @@ const webAuthn = {
             this.log('iOS-specific optimizations will be applied');
         }
         
-        // Check authentication status on page load
-        this.checkAuthStatus();
+        // Check authentication status on page load and restore session if authenticated
+        this.checkAuthStatus().then(status => {
+            if (status.authenticated) {
+                this.log('User is already authenticated, restoring session');
+                // Start message polling if authenticated
+                this.startMessagePolling();
+            } else {
+                this.log('No active session found');
+            }
+        });
         
         // Setup event handlers for message sending
         const chatForm = document.getElementById('chat-form');
