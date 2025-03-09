@@ -21,12 +21,21 @@ import traceback
 from functools import wraps
 import platform
 import hashlib
+import uuid
+from flask_cors import CORS
+import sys
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
+CORS(app)
+
+# Set a secure secret key for session management
+app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
+
+# Configure session to be secure
 app.config['SESSION_COOKIE_SECURE'] = True
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = 86400  # 24 hours
 
 # In-memory cache for rate limiting
 cache = {}
@@ -71,60 +80,56 @@ def log_response_info(response):
 # ==========================================
 
 def init_db():
-    """Initialize database tables if they don't exist"""
-    print(f"Initializing database at {DB_PATH}")
-    
-    # Only create directory if not using in-memory database
-    if DB_PATH != ':memory:' and os.path.dirname(DB_PATH):
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create security_keys table
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS security_keys (
-        id INTEGER PRIMARY KEY,
-        credential_id TEXT UNIQUE NOT NULL,
-        user_id TEXT NOT NULL,
-        username TEXT,
-        public_key TEXT NOT NULL,
-        created_at TIMESTAMP NOT NULL
-    )
-    ''')
-    
-    # Check if we need to add the username column to an existing table
+    """Initialize the database with required tables"""
     try:
-        cursor.execute("PRAGMA table_info(security_keys)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'username' not in columns:
-            print("Adding username column to security_keys table")
-            try:
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN username TEXT")
-                # Initialize existing users with their shortened user_id as username
-                cursor.execute("UPDATE security_keys SET username = 'User-' || substr(user_id, 1, 8) WHERE username IS NULL")
-                conn.commit()
-                print("Successfully added username column")
-            except sqlite3.Error as e:
-                print(f"Warning: Could not add username column: {e}")
-                conn.rollback()
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Create security_keys table with all necessary columns
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS security_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            credential_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            username TEXT,
+            public_key TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            attestation_hash TEXT,
+            combined_hash TEXT,
+            aaguid TEXT,
+            is_resident_key BOOLEAN DEFAULT 1
+        )
+        """)
+        
+        # Create key_fingerprints table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS key_fingerprints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            aaguid TEXT NOT NULL,
+            attestation_hash TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        
+        # Create messages table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            username TEXT,
+            message TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        
+        conn.commit()
+        conn.close()
+        print("Database initialized successfully")
+        
     except Exception as e:
-        print(f"Warning: Error checking for username column: {e}")
-        # Continue with table creation regardless of this failure
-    
-    # Create messages table
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        message TEXT NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    print("Database initialized successfully")
+        print(f"Error initializing database: {e}")
+        print(traceback.format_exc())
 
 # Initialize database on startup
 init_db()
@@ -173,10 +178,15 @@ def generate_challenge():
 def base64url_to_bytes(base64url):
     """Convert base64url to bytes"""
     # Add padding if needed
-    padded = base64url + '=' * (4 - len(base64url) % 4)
-    # Replace URL-safe characters with standard base64 characters
-    standard = padded.replace('-', '+').replace('_', '/')
-    return base64.b64decode(standard)
+    padding_needed = len(base64url) % 4
+    if padding_needed:
+        base64url += '=' * (4 - padding_needed)
+    
+    # Convert from base64url to standard base64
+    base64_str = base64url.replace('-', '+').replace('_', '/')
+    
+    # Decode to bytes
+    return base64.b64decode(base64_str)
 
 def bytes_to_base64url(bytes_value):
     """Convert bytes to base64url"""
@@ -185,13 +195,27 @@ def bytes_to_base64url(bytes_value):
     print(f"DEBUG - bytes_to_base64url: Input length {len(bytes_value)}, Output: {result[:20]}...")
     return result
 
+def base64url_encode(data):
+    """Convert bytes to base64url"""
+    # Encode to base64
+    base64_str = base64.b64encode(data).decode('utf-8')
+    
+    # Convert to base64url
+    base64url = base64_str.replace('+', '-').replace('/', '_').rstrip('=')
+    
+    return base64url
+
 def normalize_credential_id(credential_id):
-    """Normalize credential ID to URL-safe format without padding"""
-    # First convert to standard base64 format (with + and /)
-    standard_format = credential_id.replace('-', '+').replace('_', '/')
-    # Then convert to URL-safe format (with - and _)
-    urlsafe_format = standard_format.replace('+', '-').replace('/', '_').replace('=', '')
-    return urlsafe_format
+    """Normalize a credential ID to ensure consistent format"""
+    # Remove any padding characters
+    return credential_id.rstrip('=')
+
+def get_rp_id():
+    """Get the Relying Party ID based on the host"""
+    host = request.host
+    hostname = host.split(':')[0]  # Remove port if present
+    print(f"Using RP ID: {hostname}")
+    return hostname
 
 # ==========================================
 # Basic routes
@@ -199,151 +223,151 @@ def normalize_credential_id(credential_id):
 
 @app.route('/')
 def index():
-    """Health check endpoint"""
-    print("Index endpoint accessed")
-    return jsonify({"status": "healthy", "service": "FIDO2 Authentication System"}), 200
+    """Serve the main application page"""
+    try:
+        print("\n⭐ SERVING INDEX PAGE ⭐")
+        return send_from_directory('static', 'index.html')
+    except Exception as e:
+        print(f"Index Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 @app.route('/get_messages', methods=['GET'])
-@rate_limit(max_per_minute=60)
 def get_messages():
-    """Get all messages"""
-    print("\n=== MESSAGE RETRIEVAL REQUEST ===")
-    print("Retrieving messages from database...")
-    
+    """Get all messages from the chat"""
     try:
+        print("\n⭐ GET MESSAGES ⭐")
+        
+        # Connect to database
         conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
+        cursor = conn.cursor()
         
-        # Check if the messages table exists
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
-        if not c.fetchone():
-            print("Messages table doesn't exist yet")
-            conn.close()
-            return jsonify([]), 200
+        # Get messages with usernames
+        cursor.execute("""
+            SELECT m.id, m.user_id, COALESCE(m.username, s.username, 'User-' || substr(m.user_id, 1, 8)) as username, 
+                   m.message, m.created_at 
+            FROM messages m
+            LEFT JOIN security_keys s ON m.user_id = s.user_id
+            ORDER BY m.created_at DESC
+            LIMIT 100
+        """)
         
-        # Check if the username column exists in the security_keys table
-        c.execute("PRAGMA table_info(security_keys)")
-        columns = [col[1] for col in c.fetchall()]
-        has_username_column = 'username' in columns
-        
-        if has_username_column:
-            # Retrieve messages with username information
-            c.execute("""
-                SELECT m.user_id, m.message, m.timestamp, s.username 
-                FROM messages m
-                LEFT JOIN security_keys s ON m.user_id = s.user_id
-                GROUP BY m.id
-                ORDER BY m.timestamp DESC 
-                LIMIT 50
-            """)
-        else:
-            # Retrieve messages without username information
-            c.execute("""
-                SELECT user_id, message, timestamp 
-                FROM messages
-                ORDER BY timestamp DESC 
-                LIMIT 50
-            """)
-        
-        messages = []
-        for row in c.fetchall():
-            user_id = row[0]
-            message = row[1]
-            timestamp = row[2]
-            
-            if has_username_column:
-                username = row[3]
-                # If no username found and not a system message, use a shortened user_id
-                if not username and user_id != 'system':
-                    username = f"User-{user_id[:8]}"
-                # For system messages, use 'System' as the display name
-                if user_id == 'system':
-                    username = 'System'
-            else:
-                # Generate username from user_id when username column doesn't exist
-                username = 'System' if user_id == 'system' else f"User-{user_id[:8]}"
-                
-            messages.append({
-                "user": user_id,
-                "username": username,
-                "message": message,
-                "time": timestamp
-            })
-            
+        rows = cursor.fetchall()
         conn.close()
         
-        print(f"Retrieved {len(messages)} messages")
-        return jsonify(messages), 200
+        # Format messages
+        messages = []
+        for row in rows:
+            message_id, user_id, username, message_text, created_at = row
+            messages.append({
+                'id': message_id,
+                'user_id': user_id,
+                'username': username,
+                'message': message_text,
+                'created_at': created_at
+            })
+        
+        print(f"Get Messages: Retrieved {len(messages)} messages")
+        
+        return jsonify({
+            'success': True,
+            'messages': messages
+        })
+        
     except Exception as e:
-        print(f"Error retrieving messages: {e}")
+        print(f"Get Messages Error: {str(e)}")
         print(traceback.format_exc())
-        # Return empty list instead of error for better user experience
-        return jsonify([]), 200
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/set_username', methods=['POST'])
+def set_username():
+    """Set or change the username for the authenticated user"""
+    try:
+        print("\n⭐ SET USERNAME ⭐")
+        
+        # Check if user is authenticated
+        if not session.get('authenticated'):
+            print("Set Username Error: User not authenticated")
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        # Get username from request
+        data = request.get_json()
+        new_username = data.get('username')
+        
+        if not new_username:
+            print("Set Username Error: No username provided")
+            return jsonify({'error': 'No username provided'}), 400
+        
+        if len(new_username) > 30:
+            print("Set Username Error: Username too long")
+            return jsonify({'error': 'Username too long (max 30 characters)'}), 400
+        
+        # Get user ID from session
+        user_id = session.get('user_id')
+        old_username = session.get('username', f"User-{user_id[:8]}")
+        
+        print(f"Set Username: User {user_id} changing username from '{old_username}' to '{new_username}'")
+        
+        # Update username in database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Update username in security_keys table
+        cursor.execute(
+            "UPDATE security_keys SET username = ? WHERE user_id = ?",
+            (new_username, user_id)
+        )
+        
+        # Add a system message about the username change
+        cursor.execute(
+            "INSERT INTO messages (user_id, username, message) VALUES (?, ?, ?)",
+            ('system', 'System', f"User '{old_username}' changed their username to '{new_username}'")
+        )
+        
+        conn.commit()
+        conn.close()
+        
+        # Update username in session
+        session['username'] = new_username
+        
+        print(f"Set Username: Username updated successfully to '{new_username}'")
+        
+        return jsonify({
+            'success': True,
+            'user_id': user_id,
+            'username': new_username
+        })
+        
+    except Exception as e:
+        print(f"Set Username Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 # ==========================================
 # WebAuthn API Endpoints
 # ==========================================
 
-@app.route('/register_options', methods=['POST'])
+@app.route('/register_options', methods=['GET'])
 def webauthn_register_options():
     """Generate registration options for WebAuthn"""
     try:
         print("\n⭐ WEBAUTHN REGISTRATION OPTIONS ⭐")
         
-        # Generate a random user ID
-        user_id = secrets.token_urlsafe(32)
-        print(f"Register Options: Generated user ID: {user_id}")
+        # Generate a new user ID if not already in session
+        if 'user_id_for_registration' not in session:
+            user_id = str(uuid.uuid4())
+            session['user_id_for_registration'] = user_id
+            print(f"Register Options: Generated new user ID: {user_id}")
+        else:
+            user_id = session['user_id_for_registration']
+            print(f"Register Options: Using existing user ID from session: {user_id}")
         
-        # Store the user ID in the session for later use
-        session['user_id_for_registration'] = user_id
-        
-        # Generate a challenge
-        challenge = generate_challenge()
-        # Remove any padding for storage in the session
-        challenge = challenge.rstrip('=')
-        session['challenge'] = challenge
-        print(f"Register Options: Generated challenge: {challenge}")
-        
-        # Get host info for proper rpId setting
-        host = request.host
-        hostname = host.split(':')[0]  # Remove port if present
-        rp_id = hostname
-        print(f"Register Options: Using RP ID: {rp_id}")
-        
-        # Get all existing credentials to exclude
-        exclude_credentials = []
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT credential_id FROM security_keys")
-            rows = cursor.fetchall()
-            
-            for row in rows:
-                credential_id = row[0]
-                # Only include valid credential IDs
-                try:
-                    # Check that we can decode the credential ID
-                    credential_id_bytes = base64url_to_bytes(credential_id)
-                    exclude_credentials.append({
-                        "id": credential_id,
-                        "type": "public-key",
-                        "transports": ["usb", "ble", "nfc", "internal"]
-                    })
-                    print(f"Register Options: Excluding credential ID: {credential_id[:20]}...")
-                except Exception as e:
-                    print(f"Register Options: Skipping invalid credential ID: {e}")
-                    
-            conn.close()
-        except Exception as e:
-            print(f"Register Options: Error getting credentials to exclude: {e}")
-            # Continue without exclusion if there's an error
-            
-        # Create the options - always use resident keys with strong user verification
+        # Generate registration options
         options = {
-            "challenge": challenge,
+            "challenge": base64url_encode(os.urandom(32)),
             "rp": {
-                "name": "FIDO2 Chat System",
-                "id": rp_id
+                "name": "FIDO2 Demo App",
+                "id": get_rp_id()
             },
             "user": {
                 "id": user_id,
@@ -351,27 +375,31 @@ def webauthn_register_options():
                 "displayName": f"User {user_id[:8]}"
             },
             "pubKeyCredParams": [
-                {"type": "public-key", "alg": -7},   # ES256
+                {"type": "public-key", "alg": -7},  # ES256
                 {"type": "public-key", "alg": -257}  # RS256
             ],
-            "authenticatorSelection": {
-                "authenticatorAttachment": "cross-platform",  # Request external security keys
-                "requireResidentKey": True,  # Always require resident keys
-                "residentKey": "required",   # Make it required, not just preferred
-                "userVerification": "required"  # Require user verification for better security
-            },
             "timeout": 60000,
-            "attestation": "direct",  # Request attestation to help identify the authenticator
-            "excludeCredentials": exclude_credentials
+            "attestation": "direct",
+            "authenticatorSelection": {
+                "authenticatorAttachment": "cross-platform",
+                "requireResidentKey": True,
+                "userVerification": "preferred",
+                "residentKey": "required"
+            }
         }
         
-        print(f"Register Options: Returning options with {len(exclude_credentials)} excluded credentials")
-        return jsonify(options), 200
+        # Store challenge in session for verification
+        session['registration_challenge'] = options['challenge']
+        print(f"Register Options: Challenge stored in session: {options['challenge'][:20]}...")
+        
+        # Return options to client
+        print(f"Register Options: Returning options to client")
+        return jsonify(options)
         
     except Exception as e:
         print(f"Register Options Error: {str(e)}")
         print(traceback.format_exc())
-        return jsonify({"error": "Failed to generate registration options"}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/register_complete', methods=['POST'])
 def webauthn_register_complete():
@@ -408,56 +436,37 @@ def webauthn_register_complete():
         attestation_object_b64 = data['response']['attestationObject']
         client_data_json_b64 = data['response']['clientDataJSON']
         
-        # Check if this physical key is already registered (by attestation)
+        # Connect to the database
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         try:
-            # First, check if we have the necessary columns
-            cursor.execute("PRAGMA table_info(security_keys)")
-            columns = [col[1] for col in cursor.fetchall()]
+            # Ensure tables exist
+            init_db()
             
-            # Add attestation_hash column if it doesn't exist
-            if 'attestation_hash' not in columns:
-                print("Adding attestation_hash column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN attestation_hash TEXT")
-                conn.commit()
-                
-            # Add aaguid column if it doesn't exist (for better cross-device identification)
-            if 'aaguid' not in columns:
-                print("Adding aaguid column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN aaguid TEXT")
-                conn.commit()
-                
-            # Add combined_hash column if it doesn't exist
-            if 'combined_hash' not in columns:
-                print("Adding combined_hash column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN combined_hash TEXT")
-                conn.commit()
-                
-            # Add is_resident_key column if it doesn't exist
-            if 'is_resident_key' not in columns:
-                print("Adding is_resident_key column to security_keys table")
-                cursor.execute("ALTER TABLE security_keys ADD COLUMN is_resident_key BOOLEAN")
-                conn.commit()
+            # Ensure key_fingerprints table exists
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS key_fingerprints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                aaguid TEXT NOT NULL,
+                attestation_hash TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            conn.commit()
             
-            # Generate multiple identifiers for the physical key
-            # 1. Primary attestation hash (from attestation object)
+            # Generate identifiers for the physical key
             attestation_hash = hashlib.sha256(attestation_object_b64.encode()).hexdigest()
-            
-            # 2. Secondary hash (combination of attestation and client data)
             combined_hash = hashlib.sha256((attestation_object_b64 + client_data_json_b64).encode()).hexdigest()
             
             print(f"Generated attestation hash: {attestation_hash[:20]}...")
             print(f"Generated combined hash: {combined_hash[:20]}...")
             
-            # Try to extract AAGUID from attestation
+            # Extract AAGUID from attestation
             aaguid = None
             try:
-                # Parse the attestation object to extract AAGUID
                 attestation_bytes = base64url_to_bytes(attestation_object_b64)
-                
-                # Look for AAGUID pattern (16 bytes, typically non-zero)
                 for i in range(len(attestation_bytes) - 16):
                     potential_aaguid = attestation_bytes[i:i+16]
                     if any(b != 0 for b in potential_aaguid):
@@ -468,34 +477,71 @@ def webauthn_register_complete():
                             break
             except Exception as e:
                 print(f"Error extracting AAGUID: {e}")
-                # Continue without AAGUID if there's an error
             
-            # Check for existing registrations using multiple methods
+            # Check for existing registrations in priority order
             existing_key = None
             
-            # Method 1: First check by attestation hash - most reliable for identifying the same physical key
-            cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
+            # Check 1: Direct credential ID match
+            cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
             existing_key = cursor.fetchone()
+            if existing_key:
+                print("Register Complete: Found existing registration by credential ID")
             
-            # Method 2: If not found, check by combined hash
+            # Check 2: AAGUID + fingerprint matching
+            if not existing_key and aaguid:
+                # Check if we've seen this exact fingerprint before
+                cursor.execute(
+                    "SELECT user_id FROM key_fingerprints WHERE aaguid = ? AND attestation_hash = ?",
+                    (aaguid, attestation_hash)
+                )
+                fingerprint_result = cursor.fetchone()
+                
+                if fingerprint_result:
+                    # We've seen this exact fingerprint before
+                    fingerprint_user_id = fingerprint_result[0]
+                    print(f"Register Complete: Found existing fingerprint for user: {fingerprint_user_id}")
+                    
+                    # Get the user details
+                    cursor.execute("SELECT user_id, username FROM security_keys WHERE user_id = ?", (fingerprint_user_id,))
+                    existing_key = cursor.fetchone()
+                    if existing_key:
+                        print("Register Complete: Found existing registration by fingerprint")
+                else:
+                    # Check if we've seen this AAGUID before
+                    cursor.execute("SELECT user_id FROM security_keys WHERE aaguid = ? LIMIT 1", (aaguid,))
+                    aaguid_result = cursor.fetchone()
+                    
+                    if aaguid_result:
+                        # We've seen this AAGUID before but not this fingerprint
+                        # It's likely the same physical key on a different device
+                        aaguid_user_id = aaguid_result[0]
+                        print(f"Register Complete: Found existing AAGUID for user: {aaguid_user_id}")
+                        
+                        # Store this new fingerprint but associate it with the existing user
+                        cursor.execute(
+                            "INSERT INTO key_fingerprints (aaguid, attestation_hash, user_id) VALUES (?, ?, ?)",
+                            (aaguid, attestation_hash, aaguid_user_id)
+                        )
+                        conn.commit()
+                        print(f"Register Complete: Added new fingerprint for existing user {aaguid_user_id}")
+                        
+                        # Get the user details
+                        cursor.execute("SELECT user_id, username FROM security_keys WHERE user_id = ?", (aaguid_user_id,))
+                        existing_key = cursor.fetchone()
+                        if existing_key:
+                            print("Register Complete: Found existing registration by AAGUID")
+            
+            # Check 3: Attestation hash match
             if not existing_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE combined_hash = ?", (combined_hash,))
+                cursor.execute("SELECT user_id, username FROM security_keys WHERE attestation_hash = ?", (attestation_hash,))
                 existing_key = cursor.fetchone()
+                if existing_key:
+                    print("Register Complete: Found existing registration by attestation hash")
             
-            # Method 3: If not found, check by credential ID (for resident keys that present the same credential ID)
-            if not existing_key:
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (credential_id,))
-                existing_key = cursor.fetchone()
-            
-            # Method 4: If not found, check by normalized credential ID
-            if not existing_key:
-                normalized_credential_id = normalize_credential_id(credential_id)
-                cursor.execute("SELECT user_id, username FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
-                existing_key = cursor.fetchone()
-            
+            # If we found an existing key, log the user in with that account
             if existing_key:
                 existing_user_id, existing_username = existing_key
-                print(f"Found existing registration for this physical key: User {existing_user_id}")
+                print(f"Register Complete: Found existing registration for this physical key: User {existing_user_id}")
                 
                 # Set the user as authenticated with the existing account
                 session['authenticated'] = True
@@ -510,136 +556,121 @@ def webauthn_register_complete():
                     'user_id': existing_user_id,
                     'username': session['username']
                 }), 200
-                
-            # Log the identification data for debugging
-            print(f"Key identification data:")
-            print(f"  - Credential ID: {credential_id[:20]}...")
-            print(f"  - Attestation hash: {attestation_hash[:20]}...")
-            print(f"  - AAGUID: {aaguid}")
+            
+            # This is a new registration - store the credential
+            public_key = json.dumps({
+                'id': credential_id,
+                'type': data.get('type', 'public-key'),
+                'attestation': {
+                    'clientDataJSON': data['response']['clientDataJSON'],
+                    'attestationObject': data['response']['attestationObject']
+                }
+            })
+            
+            # Normalize the credential ID
+            normalized_credential_id = normalize_credential_id(credential_id)
+            
+            # Insert the new credential
+            cursor.execute(
+                """
+                INSERT INTO security_keys 
+                (credential_id, user_id, username, public_key, created_at, attestation_hash, combined_hash, aaguid, is_resident_key) 
+                VALUES (?, ?, ?, ?, datetime('now'), ?, ?, ?, 1)
+                """,
+                (normalized_credential_id, user_id, initial_username, public_key, attestation_hash, combined_hash, aaguid)
+            )
+            
+            # Store the fingerprint for future reference
+            if aaguid:
+                cursor.execute(
+                    "INSERT INTO key_fingerprints (aaguid, attestation_hash, user_id) VALUES (?, ?, ?)",
+                    (aaguid, attestation_hash, user_id)
+                )
+            
+            conn.commit()
+            print(f"Register Complete: New credential registered for user {user_id}")
+            
+            # Set the user as authenticated
+            session['authenticated'] = True
+            session['user_id'] = user_id
+            session['username'] = initial_username
+            
+            print(f"Register Complete: User {user_id} successfully registered and authenticated")
+            conn.close()
+            
+            return jsonify({'success': True, 'user_id': user_id, 'username': initial_username}), 200
             
         except Exception as e:
-            print(f"Error checking for existing key: {e}")
+            print(f"Register Complete Error: {str(e)}")
             print(traceback.format_exc())
-            # Continue with registration if there's an error checking
-            
-        # For this simplification, we'll just store the credential without complex validation
-        public_key = json.dumps({
-            'id': credential_id,
-            'type': data.get('type', 'public-key'),
-            'attestation': {
-                'clientDataJSON': data['response']['clientDataJSON'],
-                'attestationObject': data['response']['attestationObject']
-            }
-        })
-        
-        # Store the credential in the database
-        print(f"Register Complete: Using database: {DB_PATH}")
-        
-        # Normalize the credential ID to ensure consistent storage format
-        normalized_credential_id = normalize_credential_id(credential_id)
-        
-        # Check if this exact credential ID already exists
-        cursor.execute("SELECT credential_id FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
-        if cursor.fetchone():
-            print(f"Register Complete: Credential ID already exists, skipping insertion")
-        else:
-            try:
-                # Prepare insertion with all available columns
-                insert_columns = ["credential_id", "user_id", "public_key", "created_at"]
-                insert_values = [normalized_credential_id, user_id, public_key, "datetime('now')"]
-                
-                # Add username
-                insert_columns.append("username")
-                insert_values.append(initial_username)
-                
-                # Add attestation_hash
-                insert_columns.append("attestation_hash")
-                insert_values.append(attestation_hash)
-                
-                # Add combined_hash
-                insert_columns.append("combined_hash")
-                insert_values.append(combined_hash)
-                
-                # Add AAGUID if we extracted it
-                if aaguid:
-                    insert_columns.append("aaguid")
-                    insert_values.append(aaguid)
-                
-                # Add is_resident_key - always true since we're requiring it
-                insert_columns.append("is_resident_key")
-                insert_values.append(1)
-                
-                # Build and execute the dynamic INSERT query
-                columns_str = ", ".join(insert_columns)
-                placeholders = ", ".join(["?"] * len(insert_values))
-                
-                query = f"INSERT INTO security_keys ({columns_str}) VALUES ({placeholders})"
-                print(f"Register Complete: Executing query: {query}")
-                
-                cursor.execute(query, insert_values)
-                
-            except sqlite3.Error as e:
-                print(f"Register Complete Error: Database error: {e}")
-                print(traceback.format_exc())
-                # Fallback to basic insertion without username
-                try:
-                    cursor.execute(
-                        "INSERT INTO security_keys (credential_id, user_id, public_key, created_at) VALUES (?, ?, ?, datetime('now'))",
-                        (normalized_credential_id, user_id, public_key)
-                    )
-                except sqlite3.Error as insert_error:
-                    print(f"Register Complete Critical Error: Could not insert credential: {insert_error}")
-                    conn.rollback()
-
-        conn.commit()
-        conn.close()
-        
-        # Set the user as authenticated
-        session['authenticated'] = True
-        session['user_id'] = user_id
-        session['username'] = initial_username
-        
-        print(f"Register Complete: User {user_id} successfully registered and authenticated")
-        return jsonify({'success': True, 'user_id': user_id, 'username': initial_username}), 200
+            conn.rollback()
+            conn.close()
+            return jsonify({'error': f'Registration failed: {str(e)}'}), 500
         
     except Exception as e:
         print(f"Register Complete Error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
-@app.route('/login_options', methods=['POST'])
+@app.route('/login_options', methods=['GET'])
 def webauthn_login_options():
     """Generate authentication options for WebAuthn login"""
     try:
         print("\n⭐ WEBAUTHN LOGIN OPTIONS ⭐")
         
+        # Connect to the database to get credentials
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get all credentials from the database
+        cursor.execute("SELECT credential_id, user_id FROM security_keys")
+        credentials = cursor.fetchall()
+        conn.close()
+        
+        if not credentials:
+            print("Login Options: No credentials found in database")
+            return jsonify({
+                'error': 'No registered credentials found. Please register first.'
+            }), 400
+        
+        # Format credentials for the client
+        allow_credentials = []
+        for credential_id, user_id in credentials:
+            try:
+                # Ensure the credential ID is valid
+                normalized_credential_id = normalize_credential_id(credential_id)
+                allow_credentials.append({
+                    "id": normalized_credential_id,
+                    "type": "public-key",
+                    "transports": ["usb", "ble", "nfc", "internal"]
+                })
+                print(f"Login Options: Added credential ID: {normalized_credential_id[:20]}...")
+            except Exception as e:
+                print(f"Login Options: Skipping invalid credential ID: {e}")
+        
         # Generate a challenge
-        challenge = generate_challenge()
-        # Remove any padding for storage in the session
-        challenge = challenge.rstrip('=')
-        session['challenge'] = challenge
-        print(f"Login Options: Generated challenge: {challenge}")
+        challenge = base64url_encode(os.urandom(32))
         
-        # Get host info for proper rpId setting
-        host = request.host
-        hostname = host.split(':')[0]  # Remove port if present
+        # Store the challenge in the session for verification
+        session['login_challenge'] = challenge
+        print(f"Login Options: Challenge stored in session: {challenge[:20]}...")
         
-        # Create login options - for resident keys, don't specify allowCredentials
+        # Create the options
         options = {
             "challenge": challenge,
-            "timeout": 60000,  # 1 minute
-            "rpId": hostname,
-            "userVerification": "required"  # Require user verification for better security
+            "timeout": 60000,
+            "rpId": get_rp_id(),
+            "allowCredentials": allow_credentials,
+            "userVerification": "preferred"
         }
         
-        print("Login Options: Using resident key mode (no allowCredentials)")
-        print("Login Options: Returning options...")
-        return jsonify(options), 200
+        print(f"Login Options: Returning options with {len(allow_credentials)} credentials")
+        return jsonify(options)
         
     except Exception as e:
         print(f"Login Options Error: {str(e)}")
         print(traceback.format_exc())
-        return jsonify({"error": "Failed to generate login options"}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/login_complete', methods=['POST'])
 def webauthn_login_complete():
@@ -661,6 +692,10 @@ def webauthn_login_complete():
             print("Login Error: Missing required authentication data")
             return jsonify({'error': 'Invalid authentication data'}), 400
         
+        # Extract authenticator data and client data for identification
+        authenticator_data = data['response'].get('authenticatorData', '')
+        client_data_json = data['response'].get('clientDataJSON', '')
+        
         # For proper verification, we need to:
         # 1. Normalize the credential ID for consistent lookup
         normalized_credential_id = normalize_credential_id(credential_id)
@@ -669,76 +704,122 @@ def webauthn_login_complete():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Try both normalized and original credential ID for maximum compatibility
+        # Try to find the user account using a series of checks in priority order
+        result = None
+        
+        # Check 1: Direct credential ID match (most reliable)
         cursor.execute(
-            "SELECT user_id, public_key, credential_id, username, is_resident_key, attestation_hash FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
+            "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE credential_id = ? OR credential_id = ?", 
             (normalized_credential_id, credential_id)
         )
-        
         result = cursor.fetchone()
+        if result:
+            print("Login Complete: Found account by direct credential ID match")
         
-        # If not found directly, this might be a resident key presenting a credential
-        # that we haven't seen before but from the same authenticator
+        # Check 2: User handle from resident key (reliable for cross-device)
         if not result:
-            print(f"Login Error: Credential ID not found directly: {credential_id[:20]}...")
-            
-            # Check if we have user_id in the assertion response (for resident keys)
-            # This is the most reliable way to identify the same user across devices with resident keys
             user_handle = data.get('response', {}).get('userHandle')
-            
             if user_handle:
                 print(f"Login Complete: Found user handle in assertion: {user_handle}")
-                # Try to find the user by user_id
                 cursor.execute(
-                    "SELECT user_id, public_key, credential_id, username, is_resident_key, attestation_hash FROM security_keys WHERE user_id = ?", 
+                    "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE user_id = ?", 
                     (user_handle,)
                 )
                 result = cursor.fetchone()
-                
                 if result:
-                    print(f"Login Complete: Found user by user handle")
+                    print("Login Complete: Found account by user handle (resident key)")
+        
+        # Check 3: AAGUID + fingerprint matching
+        if not result:
+            # Try to extract AAGUID from authenticator data
+            aaguid = None
+            try:
+                auth_bytes = base64url_to_bytes(authenticator_data)
+                for i in range(len(auth_bytes) - 16):
+                    potential_aaguid = auth_bytes[i:i+16]
+                    if any(b != 0 for b in potential_aaguid):
+                        aaguid_hex = potential_aaguid.hex()
+                        if aaguid_hex != "00000000000000000000000000000000":
+                            aaguid = aaguid_hex
+                            print(f"Extracted AAGUID from authenticator data: {aaguid}")
+                            break
+            except Exception as e:
+                print(f"Error extracting AAGUID: {e}")
             
-            # If still not found, try to extract attestation hash from authenticator data
-            if not result:
-                authenticator_data = data['response'].get('authenticatorData', '')
+            if aaguid:
+                # Generate attestation hash from authenticator data
+                auth_data_hash = hashlib.sha256(authenticator_data.encode()).hexdigest()
                 
-                if authenticator_data:
-                    # Generate a hash from the authenticator data
-                    auth_data_hash = hashlib.sha256(authenticator_data.encode()).hexdigest()
-                    print(f"Generated auth data hash: {auth_data_hash[:20]}...")
+                # First check if we have this exact fingerprint
+                cursor.execute(
+                    "SELECT user_id FROM key_fingerprints WHERE aaguid = ? AND attestation_hash = ?",
+                    (aaguid, auth_data_hash)
+                )
+                fingerprint_result = cursor.fetchone()
+                
+                if fingerprint_result:
+                    # We've seen this exact fingerprint before
+                    fingerprint_user_id = fingerprint_result[0]
+                    print(f"Found matching fingerprint for user: {fingerprint_user_id}")
                     
-                    # Try to find a matching attestation hash
+                    # Get the user details
                     cursor.execute(
-                        "SELECT user_id, public_key, credential_id, username, is_resident_key, attestation_hash FROM security_keys WHERE attestation_hash = ?", 
-                        (auth_data_hash,)
+                        "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE user_id = ?",
+                        (fingerprint_user_id,)
                     )
                     result = cursor.fetchone()
-                    
                     if result:
-                        print(f"Login Complete: Found account by attestation hash match")
-            
-            if not result:
-                print(f"Login Error: Could not find matching credential")
-                conn.close()
-                return jsonify({'error': 'Credential not recognized. Please register first.'}), 401
+                        print("Login Complete: Found account by fingerprint match")
+                else:
+                    # Check if we've seen this AAGUID before
+                    cursor.execute("SELECT user_id FROM security_keys WHERE aaguid = ? LIMIT 1", (aaguid,))
+                    aaguid_result = cursor.fetchone()
+                    
+                    if aaguid_result:
+                        # We've seen this AAGUID before but not this fingerprint
+                        aaguid_user_id = aaguid_result[0]
+                        print(f"Found AAGUID match for user: {aaguid_user_id}")
+                        
+                        # Store this new fingerprint for future reference
+                        try:
+                            cursor.execute(
+                                "INSERT INTO key_fingerprints (aaguid, attestation_hash, user_id) VALUES (?, ?, ?)",
+                                (aaguid, auth_data_hash, aaguid_user_id)
+                            )
+                            conn.commit()
+                            print(f"Added new fingerprint for existing user {aaguid_user_id}")
+                        except Exception as e:
+                            print(f"Error storing fingerprint: {e}")
+                        
+                        # Get the user details
+                        cursor.execute(
+                            "SELECT user_id, public_key, credential_id, username, is_resident_key FROM security_keys WHERE user_id = ?",
+                            (aaguid_user_id,)
+                        )
+                        result = cursor.fetchone()
+                        if result:
+                            print("Login Complete: Found account by AAGUID match")
         
-        # Extract all fields from the result
+        # If we still haven't found a match, authentication fails
+        if not result:
+            print("Login Error: Could not find matching credential")
+            conn.close()
+            return jsonify({'error': 'Credential not recognized. Please register first.'}), 401
+        
+        # Extract user information from the result
         user_id = result[0]
         public_key_json = result[1]
         stored_credential_id = result[2]
         username = result[3]
-        is_resident_key = result[4] if len(result) > 4 else True  # Default to true for resident keys
-        attestation_hash = result[5] if len(result) > 5 else None
+        is_resident_key = result[4] if len(result) > 4 else True
         
         if not user_id:
-            print(f"Login Error: Invalid user ID for credential")
+            print("Login Error: Invalid user ID for credential")
             conn.close()
             return jsonify({'error': 'Invalid user credential. Please register again.'}), 401
             
         print(f"Login Complete: Found user ID: {user_id} with username: {username or 'Unknown'}")
         print(f"Login Complete: Is resident key: {is_resident_key}")
-        if attestation_hash:
-            print(f"Login Complete: Attestation hash: {attestation_hash[:20]}...")
         
         # For this simplification, we'll just verify that we found a user
         # In a real implementation, you would verify the signature against the stored public key
@@ -765,37 +846,81 @@ def webauthn_login_complete():
 
 @app.route('/logout', methods=['POST'])
 def webauthn_logout():
-    """Log out the current user"""
-    print("\n=== WEBAUTHN LOGOUT REQUEST ===")
-    
-    # Get user ID for logging before clearing
-    user_id = session.get('user_id')
-    if user_id:
-        print(f"Logging out user: {user_id}")
-    
-    # Clear entire session
-    session.clear()
-    print("Session cleared completely")
-    
-    return jsonify({"status": "success", "message": "Logged out successfully"})
+    """Log out the current user by clearing the session"""
+    try:
+        print("\n⭐ LOGOUT ⭐")
+        
+        # Check if user is authenticated
+        if session.get('authenticated'):
+            user_id = session.get('user_id')
+            username = session.get('username', f"User-{user_id[:8]}")
+            print(f"Logout: User {username} ({user_id}) logged out")
+        else:
+            print("Logout: No authenticated user to log out")
+        
+        # Clear the session
+        session.clear()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Logged out successfully'
+        })
+        
+    except Exception as e:
+        print(f"Logout Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/auth_status', methods=['GET'])
 def webauthn_auth_status():
     """Check if the user is authenticated"""
-    print("\n=== WEBAUTHN AUTH STATUS CHECK ===")
-    
-    is_authenticated = session.get('authenticated', False)
-    user_id = session.get('user_id', None) if is_authenticated else None
-    
-    if is_authenticated:
-        print(f"✅ User is authenticated: {user_id}")
-    else:
-        print("❌ User is not authenticated")
-    
-    return jsonify({
-        "authenticated": is_authenticated,
-        "userId": user_id
-    })
+    try:
+        print("\n⭐ AUTH STATUS CHECK ⭐")
+        
+        # Check if user is authenticated
+        is_authenticated = session.get('authenticated', False)
+        user_id = session.get('user_id', None)
+        username = session.get('username', None)
+        
+        if is_authenticated and user_id:
+            print(f"Auth Status: User {username} ({user_id}) is authenticated")
+            
+            # If username is not in session but user_id is, try to get it from the database
+            if not username:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT username FROM security_keys WHERE user_id = ? LIMIT 1", (user_id,))
+                    result = cursor.fetchone()
+                    conn.close()
+                    
+                    if result and result[0]:
+                        username = result[0]
+                        session['username'] = username
+                        print(f"Auth Status: Retrieved username '{username}' from database")
+                    else:
+                        username = f"User-{user_id[:8]}"
+                        session['username'] = username
+                        print(f"Auth Status: Generated default username '{username}'")
+                except Exception as e:
+                    print(f"Auth Status Error: {str(e)}")
+                    username = f"User-{user_id[:8]}"
+            
+            return jsonify({
+                'authenticated': True,
+                'user_id': user_id,
+                'username': username
+            })
+        else:
+            print("Auth Status: User is not authenticated")
+            return jsonify({
+                'authenticated': False
+            })
+            
+    except Exception as e:
+        print(f"Auth Status Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 # ==========================================
 # Chat functionality
@@ -803,82 +928,54 @@ def webauthn_auth_status():
 
 @app.route('/send_message', methods=['POST'])
 def send_message():
-    """Save a chat message to the database"""
-    print("\n=== MESSAGE SEND REQUEST ===")
-    
-    # Check authentication
-    if not session.get('authenticated'):
-        print("❌ User not authenticated")
-        return jsonify({"error": "Authentication required"}), 401
-    
-    data = request.get_json()
-    if not data or 'message' not in data:
-        print("❌ Invalid request - no message")
-        return jsonify({"error": "Message is required"}), 400
-    
-    message = data['message'].strip()
-    if not message:
-        print("❌ Empty message")
-        return jsonify({"error": "Message cannot be empty"}), 400
-    
-    user_id = session.get('user_id')
-    print(f"Message from user: {user_id}")
-    print(f"Message content: {message[:50]}...")
-    
-    # Check for command to change username
-    if message.startswith('/username '):
-        new_username = message[10:].strip()
-        if not new_username:
-            return jsonify({"error": "Username cannot be empty"}), 400
-        
-        if len(new_username) > 30:
-            return jsonify({"error": "Username too long (max 30 characters)"}), 400
-        
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            
-            # Check if username column exists
-            c.execute("PRAGMA table_info(security_keys)")
-            columns = [col[1] for col in c.fetchall()]
-            
-            if 'username' in columns:
-                # Update username for all credentials of this user
-                c.execute("UPDATE security_keys SET username = ? WHERE user_id = ?", (new_username, user_id))
-                conn.commit()
-                
-                # Add system message about username change
-                system_message = f"User {user_id} changed their username to {new_username}"
-                c.execute("INSERT INTO messages (user_id, message) VALUES ('system', ?)", (system_message,))
-                conn.commit()
-                
-                conn.close()
-                print(f"✅ Username changed to: {new_username}")
-                return jsonify({"success": True, "message": f"Username changed to {new_username}"}), 200
-            else:
-                conn.close()
-                print("❌ Username column does not exist in the database")
-                return jsonify({"error": "Username feature is not available"}), 400
-        except Exception as e:
-            print(f"❌ Error changing username: {e}")
-            print(traceback.format_exc())
-            return jsonify({"error": str(e)}), 500
-    
-    # Regular message processing
+    """Send a message to the chat (requires authentication)"""
     try:
+        print("\n⭐ SEND MESSAGE ⭐")
+        
+        # Check if user is authenticated
+        if not session.get('authenticated'):
+            print("Send Message Error: User not authenticated")
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        # Get message from request
+        data = request.get_json()
+        message_text = data.get('message')
+        
+        if not message_text:
+            print("Send Message Error: No message provided")
+            return jsonify({'error': 'No message provided'}), 400
+        
+        # Get user ID and username from session
+        user_id = session.get('user_id')
+        username = session.get('username', f"User-{user_id[:8]}")
+        
+        print(f"Send Message: From user {username} ({user_id}): {message_text[:50]}...")
+        
+        # Store message in database
         conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-    
-        c.execute("INSERT INTO messages (user_id, message) VALUES (?, ?)", 
-                (user_id, message))
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT INTO messages (user_id, username, message) VALUES (?, ?, ?)",
+            (user_id, username, message_text)
+        )
+        
         conn.commit()
-        print("✅ Message saved successfully")
         conn.close()
-        return jsonify({"success": True}), 200
+        
+        print("Send Message: Message stored successfully")
+        
+        return jsonify({
+            'success': True,
+            'user_id': user_id,
+            'username': username,
+            'message': message_text
+        })
+        
     except Exception as e:
-        print(f"❌ Error saving message: {e}")
+        print(f"Send Message Error: {str(e)}")
         print(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
 # ==========================================
 # Admin functionality
@@ -886,208 +983,221 @@ def send_message():
 
 @app.route('/debug_all', methods=['GET'])
 def debug_all():
-    """Debug endpoint to view all credentials (admin only)"""
+    """Debug endpoint to view all data (for development only)"""
     try:
-        print("\n=== DEBUG ALL REQUEST ===")
-        
-        # In a real app, this would be protected by admin authentication
-        # For this demo, we'll allow it for testing purposes
-        
-        # Get all credentials from the database
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get all security keys with all available columns
-        cursor.execute("PRAGMA table_info(security_keys)")
-        columns = [col[1] for col in cursor.fetchall()]
-        
-        # Build a dynamic query based on available columns
-        select_columns = ["credential_id", "user_id", "username", "public_key", "created_at"]
-        
-        # Add optional columns if they exist
-        if "attestation_hash" in columns:
-            select_columns.append("attestation_hash")
-        if "aaguid" in columns:
-            select_columns.append("aaguid")
-        if "combined_hash" in columns:
-            select_columns.append("combined_hash")
-        if "authenticator_model" in columns:
-            select_columns.append("authenticator_model")
-        if "browser_fingerprint" in columns:
-            select_columns.append("browser_fingerprint")
-        if "registration_time" in columns:
-            select_columns.append("registration_time")
-            
-        # Build and execute the query
-        query = f"SELECT {', '.join(select_columns)} FROM security_keys"
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        
-        # Prepare the response data
-        security_keys = []
-        for row in rows:
-            # Create a dictionary with column names as keys
-            key_data = {}
-            for i, col in enumerate(select_columns):
-                if i < len(row):
-                    # For credential_id, check if it's valid base64url
-                    if col == "credential_id":
-                        try:
-                            # Try to decode it to check if it's valid
-                            base64url_to_bytes(row[i])
-                            key_data[col] = row[i]
-                        except Exception as e:
-                            key_data[col] = f"INVALID: {row[i]}"
-                    else:
-                        key_data[col] = row[i]
-                        
-            security_keys.append(key_data)
-        
-        # Get all messages
-        cursor.execute("SELECT user_id, message, timestamp FROM messages ORDER BY timestamp DESC LIMIT 20")
-        message_rows = cursor.fetchall()
-        
-        messages = []
-        for row in message_rows:
-            user_id, message, timestamp = row
-            messages.append({
-                "user_id": user_id,
-                "message": message,
-                "timestamp": timestamp
-            })
+        print("\n⭐ DEBUG ALL DATA ⭐")
         
         # Get environment info
         env_info = {
-            "DB_PATH": DB_PATH,
-            "FLASK_ENV": os.environ.get('FLASK_ENV', 'production'),
-            "PLATFORM": platform.platform(),
-            "PYTHON_VERSION": platform.python_version(),
-            "REGISTRATION_LIMITS": REGISTRATION_LIMITS
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "hostname": platform.node()
         }
         
-        # Get session info (for debugging only)
-        session_info = dict(session)
+        # Get database info
+        db_info = {}
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get all tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        db_info["tables"] = [table[0] for table in tables]
+        
+        # Get security keys
+        security_keys = []
+        try:
+            cursor.execute("SELECT credential_id, user_id, username, created_at, attestation_hash, aaguid FROM security_keys")
+            rows = cursor.fetchall()
+            for row in rows:
+                credential_id, user_id, username, created_at, attestation_hash, aaguid = row
+                security_keys.append({
+                    "credential_id": credential_id[:20] + "..." if credential_id else None,
+                    "user_id": user_id,
+                    "username": username,
+                    "created_at": created_at,
+                    "attestation_hash": attestation_hash[:20] + "..." if attestation_hash else None,
+                    "aaguid": aaguid
+                })
+        except sqlite3.Error as e:
+            security_keys = [{"error": str(e)}]
+        
+        # Get key fingerprints
+        fingerprints = []
+        try:
+            cursor.execute("SELECT aaguid, attestation_hash, user_id, created_at FROM key_fingerprints")
+            rows = cursor.fetchall()
+            for row in rows:
+                aaguid, attestation_hash, user_id, created_at = row
+                fingerprints.append({
+                    "aaguid": aaguid,
+                    "attestation_hash": attestation_hash[:20] + "..." if attestation_hash else None,
+                    "user_id": user_id,
+                    "created_at": created_at
+                })
+        except sqlite3.Error as e:
+            fingerprints = [{"error": str(e)}]
+        
+        # Get messages
+        messages = []
+        try:
+            cursor.execute("SELECT user_id, username, message, created_at FROM messages ORDER BY created_at DESC LIMIT 10")
+            rows = cursor.fetchall()
+            for row in rows:
+                user_id, username, message, created_at = row
+                messages.append({
+                    "user_id": user_id,
+                    "username": username,
+                    "message": message,
+                    "created_at": created_at
+                })
+        except sqlite3.Error as e:
+            messages = [{"error": str(e)}]
         
         conn.close()
         
-        return jsonify({
-            "security_keys": security_keys,
-            "messages": messages,
+        # Get session info
+        session_info = {}
+        for key in session:
+            # Don't include challenge in output for security
+            if key in ['registration_challenge', 'login_challenge']:
+                session_info[key] = "[REDACTED]"
+            else:
+                session_info[key] = session[key]
+        
+        # Compile all debug info
+        debug_info = {
             "environment": env_info,
-            "session": session_info
-        }), 200
+            "database": db_info,
+            "security_keys": security_keys,
+            "key_fingerprints": fingerprints,
+            "messages": messages,
+            "session": session_info,
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        return jsonify(debug_info)
         
     except Exception as e:
-        print(f"Debug Error: {str(e)}")
+        print(f"Debug All Error: {str(e)}")
         print(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/cleanup_credentials', methods=['POST'])
 def cleanup_credentials():
-    """Admin function to clean up all credentials"""
+    """Clean up credentials for the current user"""
     try:
-        print("\n⭐ CLEANING UP ALL CREDENTIALS ⭐")
+        print("\n⭐ CLEANUP CREDENTIALS ⭐")
         
-        # For security, require a secret token
-        data = request.get_json()
-        if not data or data.get('secret') != os.environ.get('ADMIN_SECRET', 'admin_secret'):
-            return jsonify({"error": "Unauthorized"}), 401
+        # Check if user is authenticated
+        if not session.get('authenticated'):
+            print("Cleanup Credentials Error: User not authenticated")
+            return jsonify({'error': 'Authentication required'}), 401
         
+        # Get user ID from session
+        user_id = session.get('user_id')
+        username = session.get('username', f"User-{user_id[:8]}")
+        
+        print(f"Cleanup Credentials: Removing credentials for user {username} ({user_id})")
+        
+        # Connect to database
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Delete all security keys
-        cursor.execute("DELETE FROM security_keys")
-        deleted_count = cursor.rowcount
+        # Delete user's credentials from security_keys
+        cursor.execute("DELETE FROM security_keys WHERE user_id = ?", (user_id,))
+        key_count = cursor.rowcount
+        
+        # Delete user's fingerprints from key_fingerprints
+        try:
+            cursor.execute("DELETE FROM key_fingerprints WHERE user_id = ?", (user_id,))
+            fingerprint_count = cursor.rowcount
+        except sqlite3.Error:
+            fingerprint_count = 0
+        
+        # Delete user's messages from messages
+        cursor.execute("DELETE FROM messages WHERE user_id = ?", (user_id,))
+        message_count = cursor.rowcount
         
         conn.commit()
         conn.close()
-        
-        return jsonify({
-            "status": "success",
-            "message": f"Deleted {deleted_count} credentials"
-        })
-        
-    except Exception as e:
-        print(f"Cleanup Error: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/force_cleanup', methods=['GET', 'POST'])
-def force_cleanup_credentials():
-    """Force cleanup all credentials (admin only, for testing)"""
-    try:
-        print("\n=== FORCE CLEANUP REQUEST ===")
-        
-        # In a real app, this would be protected by admin authentication
-        # For this demo, we'll allow it for testing purposes
-        
-        # Clear all credentials from the database
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Delete all records from security_keys
-        cursor.execute("DELETE FROM security_keys")
-        key_count = cursor.rowcount
-        
-        # Delete all messages
-        try:
-            cursor.execute("DELETE FROM messages")
-            message_count = cursor.rowcount
-        except sqlite3.OperationalError:
-            # Messages table might not exist
-            message_count = 0
-            
-        # Commit changes
-        conn.commit()
-        
-        # Reset the database schema to ensure all columns are properly created
-        try:
-            # Drop and recreate the security_keys table with all columns
-            cursor.execute("DROP TABLE IF EXISTS security_keys")
-            
-            # Create the security_keys table with all necessary columns
-            cursor.execute("""
-            CREATE TABLE security_keys (
-                credential_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                username TEXT,
-                public_key TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                attestation_hash TEXT,
-                combined_hash TEXT,
-                aaguid TEXT,
-                is_resident_key BOOLEAN DEFAULT 1
-            )
-            """)
-            
-            # Create the messages table if it doesn't exist
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                message TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """)
-            
-            conn.commit()
-            print("Database schema reset successfully")
-        except Exception as schema_error:
-            print(f"Error resetting schema: {schema_error}")
-            # Continue with cleanup even if schema reset fails
         
         # Clear the session
         session.clear()
         
-        conn.close()
+        print(f"Cleanup Credentials: Removed {key_count} credentials, {fingerprint_count} fingerprints, and {message_count} messages")
         
         return jsonify({
             'success': True,
-            'message': f'All credentials and messages have been removed. Deleted {key_count} credentials and {message_count} messages. Database schema has been reset.',
+            'message': f'Account deleted successfully. Removed {key_count} credentials, {fingerprint_count} fingerprints, and {message_count} messages.',
             'key_count': key_count,
+            'fingerprint_count': fingerprint_count,
             'message_count': message_count
-        }), 200
+        })
+        
+    except Exception as e:
+        print(f"Cleanup Credentials Error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/force_cleanup', methods=['GET'])
+def force_cleanup_credentials():
+    """Force cleanup all credentials and messages from the database"""
+    try:
+        print("\n⭐ FORCE CLEANUP ⭐")
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Delete all records from security_keys
+        try:
+            cursor.execute("DELETE FROM security_keys")
+            key_count = cursor.rowcount
+            print(f"Deleted {key_count} security keys")
+        except sqlite3.Error as e:
+            key_count = 0
+            print(f"Error deleting security keys: {e}")
+        
+        # Delete all records from key_fingerprints
+        try:
+            cursor.execute("DELETE FROM key_fingerprints")
+            fingerprint_count = cursor.rowcount
+            print(f"Deleted {fingerprint_count} key fingerprints")
+        except sqlite3.Error as e:
+            fingerprint_count = 0
+            print(f"Error deleting key fingerprints: {e}")
+        
+        # Delete all records from messages
+        try:
+            cursor.execute("DELETE FROM messages")
+            message_count = cursor.rowcount
+            print(f"Deleted {message_count} messages")
+        except sqlite3.Error as e:
+            message_count = 0
+            print(f"Error deleting messages: {e}")
+        
+        # Reset the database schema
+        try:
+            # Drop and recreate tables to ensure schema is up to date
+            cursor.execute("DROP TABLE IF EXISTS security_keys")
+            cursor.execute("DROP TABLE IF EXISTS key_fingerprints")
+            cursor.execute("DROP TABLE IF EXISTS messages")
+            
+            # Reinitialize the database
+            init_db()
+            print("Database schema reset successfully")
+        except sqlite3.Error as e:
+            print(f"Error resetting database schema: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        # Clear the session
+        session.clear()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Cleanup complete. Deleted {key_count} security keys, {fingerprint_count} fingerprints, and {message_count} messages.'
+        })
         
     except Exception as e:
         print(f"Force Cleanup Error: {str(e)}")
@@ -1100,35 +1210,83 @@ def force_cleanup_credentials():
 
 @app.route('/chat')
 def serve_chat():
-    """Serve the chat application HTML"""
-    return send_from_directory('static', 'index.html')
+    """Serve the chat page"""
+    try:
+        print("\n⭐ SERVING CHAT PAGE ⭐")
+        return send_from_directory('static', 'chat.html')
+    except Exception as e:
+        print(f"Chat Page Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 @app.route('/<path:path>')
 def serve_static(path):
     """Serve static files"""
-    return send_from_directory('static', path)
+    try:
+        print(f"\n⭐ SERVING STATIC FILE: {path} ⭐")
+        return send_from_directory('static', path)
+    except Exception as e:
+        print(f"Static File Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 @app.route('/style.css')
 def serve_css():
-    """Serve CSS file"""
-    return send_from_directory('static', 'style.css')
+    """Serve the CSS file"""
+    try:
+        print("\n⭐ SERVING CSS FILE ⭐")
+        return send_from_directory('static', 'style.css')
+    except Exception as e:
+        print(f"CSS File Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 @app.route('/webauthn.js')
 def serve_webauthn_js():
-    """Serve WebAuthn JavaScript file"""
-    return send_from_directory('static', 'webauthn.js')
+    """Serve the WebAuthn JavaScript file"""
+    try:
+        print("\n⭐ SERVING WEBAUTHN JS FILE ⭐")
+        return send_from_directory('static', 'webauthn.js')
+    except Exception as e:
+        print(f"WebAuthn JS File Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 @app.route('/chat.js')
 def serve_chat_js():
-    """Serve chat JavaScript file"""
-    return send_from_directory('static', 'chat.js')
+    """Serve the chat JavaScript file"""
+    try:
+        print("\n⭐ SERVING CHAT JS FILE ⭐")
+        return send_from_directory('static', 'chat.js')
+    except Exception as e:
+        print(f"Chat JS File Error: {str(e)}")
+        print(traceback.format_exc())
+        return f"Error: {str(e)}", 500
 
 # ==========================================
-# Main application entry point
-# ==========================================
-
+# Main entry point
 if __name__ == '__main__':
-    import os
-    # Use PORT environment variable for cloud deployment compatibility
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True) 
+    try:
+        # Initialize the database
+        init_db()
+        
+        # Get port from environment or use default
+        port = int(os.environ.get('PORT', 5000))
+        
+        # Get debug mode from environment
+        debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+        
+        print(f"\n⭐ STARTING FIDO2 AUTHENTICATION SERVER ⭐")
+        print(f"Database: {DB_PATH}")
+        print(f"Port: {port}")
+        print(f"Debug mode: {debug}")
+        print(f"Platform: {platform.platform()}")
+        print(f"Python version: {platform.python_version()}")
+        
+        # Start the server
+        app.run(host='0.0.0.0', port=port, debug=debug)
+        
+    except Exception as e:
+        print(f"Server startup error: {str(e)}")
+        print(traceback.format_exc())
+        sys.exit(1) 
