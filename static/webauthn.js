@@ -915,7 +915,7 @@ const webAuthn = {
     
     // Send a message
     sendMessage: function(event) {
-        event.preventDefault();
+        if (event) event.preventDefault();
         
         const messageInput = document.getElementById('message-input');
         if (!messageInput) return;
@@ -923,18 +923,38 @@ const webAuthn = {
         const message = messageInput.value.trim();
         if (!message) return;
         
+        // Check if this is an image message
+        let finalMessage = message;
+        if (message.startsWith('/image ')) {
+            // Convert /image command to @ format
+            finalMessage = '@' + message.substring(7);
+        }
+        
         // Validate image links
-        const imageMatch = message.match(/^@(https?:\/\/.*\.(?:gif|png|jpe?g))$/i);
+        const imageMatch = finalMessage.match(/^@(https?:\/\/.*\.(?:gif|png|jpe?g))$/i);
         if (imageMatch) {
             // Pre-validate the image URL
             const img = new Image();
             img.onerror = () => {
                 alert('Invalid image URL or unsupported format. Please check the URL and try again.');
+                messageInput.value = '';
                 return;
             };
+            img.onload = () => {
+                // Image is valid, proceed with sending
+                this.submitMessage(finalMessage, messageInput);
+            };
             img.src = imageMatch[1];
+        } else {
+            // Regular message, send immediately
+            this.submitMessage(finalMessage, messageInput);
         }
         
+        return false;
+    },
+    
+    // Helper function to submit the message to the server
+    submitMessage: function(message, messageInput) {
         this.debugFetch(
             this.getEndpointPath('send_message'),
             {
@@ -964,8 +984,6 @@ const webAuthn = {
             this.log(`Send message error: ${error.message}`);
             alert(`Failed to send message: ${error.message}`);
         });
-        
-        return false;
     },
     
     // Check auth status and update UI accordingly
