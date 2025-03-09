@@ -1037,12 +1037,62 @@ const webAuthn = {
         return "Debug information printed to console";
     },
     
+    // Check if external security keys are supported
+    checkExternalKeySupport: async function() {
+        try {
+            // Try to create a credential with cross-platform requirement
+            const supported = await navigator.credentials.create({
+                publicKey: {
+                    challenge: new Uint8Array(32),
+                    rp: {
+                        name: "FIDO2 Chat System",
+                        id: window.location.hostname
+                    },
+                    user: {
+                        id: new Uint8Array(16),
+                        name: "test@test.com",
+                        displayName: "Test User"
+                    },
+                    pubKeyCredParams: [{
+                        type: "public-key",
+                        alg: -7
+                    }],
+                    authenticatorSelection: {
+                        authenticatorAttachment: "cross-platform",
+                        requireResidentKey: true,
+                        residentKey: "required",
+                        userVerification: "discouraged"
+                    },
+                    timeout: 1  // Set a very short timeout as we just want to check support
+                }
+            }).then(() => true).catch(error => {
+                // Check if the error indicates no available authenticator
+                return !error.message.includes('available authenticator');
+            });
+            
+            this.log(`External security key support: ${supported}`);
+            return supported;
+        } catch (error) {
+            this.log('Error checking external key support:', error);
+            return false;
+        }
+    },
+
     // Initialize the application
-    init: function() {
+    init: async function() {
         this.log('Initializing WebAuthn client');
         
         // Log platform information
         const env = this.logEnvironmentInfo();
+        
+        // Check WebAuthn and external key support
+        const webAuthnSupport = !!navigator.credentials && !!navigator.credentials.create;
+        const externalKeySupport = await this.checkExternalKeySupport();
+        
+        if (webAuthnSupport && !externalKeySupport) {
+            alert("This application requires a physical security key (like a YubiKey). " +
+                  "Platform authenticators like Face ID, Touch ID, or Windows Hello are not supported.");
+        }
         
         if (env.isIOS) {
             this.log('iOS-specific optimizations will be applied');
