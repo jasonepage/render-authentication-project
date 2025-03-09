@@ -1,47 +1,54 @@
 # FIDO2 Chat System
 
-A secure chat application using WebAuthn/FIDO2 for authentication with physical security keys.
+A secure chat application using WebAuthn/FIDO2 for authentication with both passkeys and physical security keys.
 
 ## Features
 
 - **FIDO2/WebAuthn Authentication**
-  - Cross-platform security key support (YubiKey, etc.)
-  - One physical key = one account policy
+  - Multi-authenticator support:
+    - Platform authenticators (Face ID, Touch ID, Windows Hello)
+    - Cross-platform security keys (YubiKey, etc.)
+    - QR code-based passkey transfer
+  - One device = one account model:
+    - Each Mac gets its own account
+    - Each iPhone gets its own account
+    - Each security key gets its own account
+  - Seamless cross-device experience with QR codes
   - Resident key requirement for better user experience
-  - Cross-device authentication support
-  - Platform authenticators (Face ID, Touch ID, Windows Hello) not supported
 
 - **Fun Username System**
-  - Random username assignment from a curated list of characters
+  - Random username assignment
   - Easy username cycling with "🎲 New Random Username" button
-  - 40+ preset usernames from popular franchises
   - Instant username updates in chat
+  - "(You)" indicator for own messages
 
 - **Real-Time Chat**
   - Public chat room visible to all visitors
   - Message sending restricted to authenticated users
   - Real-time message updates (5-second polling)
-  - Username display with "(You)" indicator for own messages
+  - Clean and intuitive interface
 
 ## Technical Implementation
 
+### Frontend Architecture
+Single JavaScript module (`webauthn.js`) containing:
+- Core WebAuthn functionality
+- Chat interface management
+- Username handling
+- UI updates and event handling
+- Built-in debugging capabilities
+
 ### Authentication Flow
-1. **Registration**: Users register with a physical security key
-2. **Login**: Users can authenticate using their registered key
-3. **Cross-Device**: Same key works across different devices
-4. **Key Recognition**: System identifies unique physical keys using AAGUID and attestation data
+1. **Registration**: Users register with either:
+   - Platform authenticator (Face ID, Touch ID, Windows Hello)
+   - Physical security key
+   - QR code passkey transfer
+2. **Login**: Users authenticate using their registered authenticator
+3. **Session Management**: Secure session handling with server-side validation
 
 ### Database Schema
-- `security_keys`: Stores credentials, usernames, and key identifiers
+- `security_keys`: Stores credentials and usernames
 - `messages`: Stores chat messages with user associations
-- `key_fingerprints`: Tracks key identifiers for cross-device recognition
-
-### Frontend Architecture
-- Modular JavaScript with separate components for:
-  - Core WebAuthn functionality (`webauthn-core.js`)
-  - Chat interface
-  - Username management
-  - Real-time updates
 
 ## API Endpoints
 
@@ -71,23 +78,26 @@ Currently deployed on Render.com at `render-authentication-project.onrender.com`
 
 ## Security Features
 
-- Physical security keys only (no platform authenticators)
-  - Enforces use of external authenticators like YubiKeys
-  - Prevents use of Face ID, Touch ID, Windows Hello
-  - Ensures true cross-device authentication
-- Resident key requirement for better security
-- One physical key = one account enforcement
-- Cross-device key recognition
-- Secure session management
-- Rate limiting on message endpoints
+- **Flexible Authentication Options**
+  - Platform authenticators (passkeys) for convenience
+  - Physical security keys for enhanced security
+  - QR code passkey transfer between devices
+  - One authenticator = one account model
+
+- **Secure Implementation**
+  - Resident key requirement
+  - Secure session management
+  - Cross-device key recognition
+  - Rate limiting on endpoints
 
 ## Troubleshooting
 
 ### Common Issues
-- 404 errors: Check if you're using the correct endpoint URLs
-- Cross-device authentication: Ensure using the same physical key
-- Username not updating: Try refreshing the page
-- Platform authenticator error: The system requires a physical security key (like YubiKey) and does not support built-in authenticators like Face ID or Touch ID
+- **Device Recognition**: Each device gets its own unique account - this is by design!
+- **QR Code Transfer**: Use the browser's built-in QR code feature to transfer passkeys between devices
+- **Username Updates**: Refresh the page if username changes don't appear
+- **Message Display**: Messages auto-refresh every 5 seconds
+- **Multiple Accounts**: It's normal to have different accounts on different devices - that's how the system is designed
 
 ## Authors
 - Chris Becker

@@ -19,6 +19,10 @@ import cbor2
 from functools import wraps
 import platform
 import random
+from cryptography.hazmat.primitives.asymmetric import ec, padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev_secret_key_change_in_production')
@@ -310,6 +314,54 @@ def find_existing_user_by_key_identifiers(aaguid, combined_key_hash):
         print(traceback.format_exc())
         return None
 
+def extract_public_key_from_attestation(attestation_object):
+    """Extract and format the public key from the attestation object."""
+    try:
+        # Decode CBOR attestation object
+        decoded = cbor2.loads(base64url_to_bytes(attestation_object))
+        
+        # Extract the public key from authData
+        auth_data = decoded['authData']
+        
+        # Skip rpIdHash (32 bytes) and flags (1 byte) and counter (4 bytes)
+        pos = 37
+        
+        # Extract COSE key
+        cred_data_length = len(auth_data[pos:])
+        if cred_data_length > 0:
+            # Skip AAGUID (16 bytes) and credentialId length (2 bytes)
+            cred_id_len = int.from_bytes(auth_data[pos + 16:pos + 18], 'big')
+            pos += 18 + cred_id_len
+            
+            # The remaining data is the COSE public key
+            cose_key = cbor2.loads(auth_data[pos:])
+            
+            # Convert COSE key to PEM format
+            if cose_key[3] == -7:  # ES256 algorithm
+                x = cose_key[-2]
+                y = cose_key[-3]
+                
+                # Create EC public key
+                public_numbers = ec.EllipticCurvePublicNumbers(
+                    x=int.from_bytes(x, 'big'),
+                    y=int.from_bytes(y, 'big'),
+                    curve=ec.SECP256R1()
+                )
+                public_key = public_numbers.public_key()
+                
+                # Convert to PEM format
+                pem = public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                )
+                
+                return pem.decode('ascii')
+            else:
+                raise ValueError(f"Unsupported algorithm: {cose_key[3]}")
+    except Exception as e:
+        print(f"Error extracting public key: {str(e)}")
+        raise
+
 # ==========================================
 # Basic routes
 # ==========================================
@@ -475,6 +527,9 @@ def webauthn_register_complete():
         attestation_object = data['response']['attestationObject']
         aaguid, attestation_hash, combined_key_hash, resident_key = extract_attestation_info(attestation_object)
         
+        # Extract and format the public key
+        public_key_pem = extract_public_key_from_attestation(attestation_object)
+        
         # Check if this physical key is already registered
         existing_user_id = find_existing_user_by_key_identifiers(aaguid, combined_key_hash)
         
@@ -497,10 +552,11 @@ def webauthn_register_complete():
                 'userId': existing_user_id
             })
         
-        # For this simplification, we'll just store the credential without complex validation
+        # Store the credential with the public key
         public_key = json.dumps({
             'id': credential_id,
             'type': data.get('type', 'public-key'),
+            'publicKey': public_key_pem,
             'attestation': {
                 'clientDataJSON': data['response']['clientDataJSON'],
                 'attestationObject': data['response']['attestationObject']
@@ -614,6 +670,34 @@ def webauthn_login_options():
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
+def verify_authenticator_signature(public_key_data, client_data_hash, authenticator_data, signature):
+    """Verify the authenticator's signature using the stored public key."""
+    try:
+        # Parse the stored public key
+        stored_key = json.loads(public_key_data)
+        
+        # Reconstruct the signed data (authenticator_data + client_data_hash)
+        signed_data = authenticator_data + client_data_hash
+        
+        # Convert the stored key to a format we can use
+        public_key = serialization.load_pem_public_key(
+            stored_key['attestation']['publicKey'].encode()
+        )
+        
+        # Verify the signature
+        try:
+            public_key.verify(
+                signature,
+                signed_data,
+                ec.ECDSA(hashes.SHA256())
+            )
+            return True
+        except InvalidSignature:
+            return False
+    except Exception as e:
+        print(f"Signature verification error: {str(e)}")
+        return False
+
 @app.route('/login_complete', methods=['POST'])
 def webauthn_login_complete():
     """Complete the login process for WebAuthn"""
@@ -642,6 +726,11 @@ def webauthn_login_complete():
             
         client_data_json_b64 = data['response']['clientDataJSON']
         client_data_json = base64url_to_bytes(client_data_json_b64)
+        
+        # Get authenticator data and signature
+        authenticator_data = base64url_to_bytes(data['response']['authenticatorData'])
+        signature = base64url_to_bytes(data['response']['signature'])
+        
         try:
             client_data = json.loads(client_data_json.decode('utf-8'))
             
@@ -691,7 +780,16 @@ def webauthn_login_complete():
             return jsonify({'error': 'Unknown credential'}), 400
             
         user_id = row[0]
+        public_key_data = row[1]
         print(f"Login Complete: Found user {user_id}")
+        
+        # Calculate client data hash
+        client_data_hash = hashlib.sha256(client_data_json).digest()
+        
+        # Verify the signature using stored public key
+        if not verify_authenticator_signature(public_key_data, client_data_hash, authenticator_data, signature):
+            print("Login Error: Signature verification failed")
+            return jsonify({'error': 'Invalid signature'}), 400
         
         # Set session
         session['authenticated'] = True
