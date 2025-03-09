@@ -4,7 +4,7 @@ A secure real-time chat application using FIDO2 WebAuthn authentication with phy
 
 ## Features
 
-- **Physical Security Key Authentication**: Secure login using FIDO2-compatible security keys (e.g., YubiKey)
+- **Physical Security Key Authentication**: Secure login using FIDO2-compatible security keys 
 - **Fun Username System**: Random character names assigned to users with easy cycling
 - **Real-Time Chat**: Public chat room visible to all visitors, with message sending restricted to authenticated users
 - **Image Sharing**: Support for sharing images in chat using special commands
@@ -61,7 +61,6 @@ Currently deployed on Render.com with automatic deployments from the main branch
 
 ## Security Features
 
-- Physical security keys only (platform authenticators like Face ID/Touch ID not supported)
 - Session-based authentication
 - Image URL validation and sanitization
 - XSS prevention through content escaping
@@ -70,7 +69,6 @@ Currently deployed on Render.com with automatic deployments from the main branch
 ## Troubleshooting
 
 Common issues:
-- "Platform authenticator not supported": Use a physical security key instead
 - Image not displaying: Verify the URL ends with .gif, .png, .jpg, or .jpeg
 - Image fails to send: Check if the URL is accessible and the format is supported
 
