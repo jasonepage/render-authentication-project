@@ -237,8 +237,18 @@ const webAuthn = {
     },
 
     // Register a new security key
-    registerKey: function() {
+    registerKey: async function() {
         this.log('Starting registration process');
+        
+        // Check external key support before proceeding
+        const externalKeySupport = await this.checkExternalKeySupport();
+        if (!externalKeySupport) {
+            alert("This application requires a physical security key (like a YubiKey). " +
+                  "Platform authenticators like Face ID, Touch ID, or Windows Hello are not supported.");
+            return;
+        }
+        
+        this.showModal('Please insert your security key and follow the browser instructions...');
         this.logEnvironmentInfo();
         
         this.showModal('Please insert your security key and follow the browser instructions...');
@@ -457,9 +467,19 @@ const webAuthn = {
     },
 
     // Login with a registered security key
-    loginWithKey: function() {
+    loginWithKey: async function() {
         this.log('Starting login process');
+        
+        // Check external key support before proceeding
+        const externalKeySupport = await this.checkExternalKeySupport();
+        if (!externalKeySupport) {
+            alert("This application requires a physical security key (like a YubiKey). " +
+                  "Platform authenticators like Face ID, Touch ID, or Windows Hello are not supported.");
+            return;
+        }
+        
         this.showModal('Please insert your security key and follow the browser instructions...');
+        this.logEnvironmentInfo();
 
         const isIOS = this.isIOS();
         if (isIOS) {
@@ -1099,13 +1119,12 @@ const webAuthn = {
         // Log platform information
         const env = this.logEnvironmentInfo();
         
-        // Check WebAuthn and external key support
+        // Only check basic WebAuthn support
         const webAuthnSupport = !!navigator.credentials && !!navigator.credentials.create;
-        const externalKeySupport = await this.checkExternalKeySupport();
-        
-        if (webAuthnSupport && !externalKeySupport) {
-            alert("This application requires a physical security key (like a YubiKey). " +
-                  "Platform authenticators like Face ID, Touch ID, or Windows Hello are not supported.");
+        if (!webAuthnSupport) {
+            this.log('WebAuthn is not supported in this browser');
+            alert("Your browser doesn't support WebAuthn. Please use a modern browser.");
+            return;
         }
         
         if (env.isIOS) {
