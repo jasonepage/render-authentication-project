@@ -105,9 +105,19 @@ def init_db():
     )
     ''')
     
-    # Create messages table
+    # Create messages table (public chat)
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        message TEXT NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    # Create private_messages table (registered users only)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS private_messages (
         id INTEGER PRIMARY KEY,
         user_id TEXT NOT NULL,
         message TEXT NOT NULL,
@@ -375,9 +385,9 @@ def index():
 @app.route('/get_messages', methods=['GET'])
 @rate_limit(max_per_minute=60)
 def get_messages():
-    """Get all messages"""
-    print("\n=== MESSAGE RETRIEVAL REQUEST ===")
-    print("Retrieving messages from database...")
+    """Get all public messages"""
+    print("\n=== PUBLIC MESSAGE RETRIEVAL REQUEST ===")
+    print("Retrieving public messages from database...")
     
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -388,7 +398,7 @@ def get_messages():
         if not c.fetchone():
             print("Messages table doesn't exist yet")
             conn.close()
-            return jsonify([]), 200
+            return jsonify({"messages": []}), 200
         
         # Join with security_keys table to get usernames
         c.execute("""
@@ -399,21 +409,69 @@ def get_messages():
         """)
         
         messages = [{
-            "user": row[0],
+            "user": row[3] or f"User-{row[0][:6]}",  # Use username or fallback
             "message": row[1],
             "time": row[2],
-            "username": row[3] or f"User-{row[0][:6]}"  # Fallback to shortened user ID if no username
+            "timestamp": row[2]
         } for row in c.fetchall()]
         
         conn.close()
         
-        print(f"Retrieved {len(messages)} messages")
-        return jsonify(messages), 200
+        print(f"Retrieved {len(messages)} public messages")
+        return jsonify({"messages": messages}), 200
     except Exception as e:
-        print(f"Error retrieving messages: {e}")
+        print(f"Error retrieving public messages: {e}")
         print(traceback.format_exc())
         # Return empty list instead of error for better user experience
-        return jsonify([]), 200
+        return jsonify({"messages": []}), 200
+
+@app.route('/get_private_messages', methods=['GET'])
+@rate_limit(max_per_minute=60)
+def get_private_messages():
+    """Get all private messages (authenticated users only)"""
+    print("\n=== PRIVATE MESSAGE RETRIEVAL REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    print("Retrieving private messages from database...")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Check if the private_messages table exists
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='private_messages'")
+        if not c.fetchone():
+            print("Private messages table doesn't exist yet")
+            conn.close()
+            return jsonify({"messages": []}), 200
+        
+        # Join with security_keys table to get usernames
+        c.execute("""
+            SELECT pm.user_id, pm.message, pm.timestamp, sk.username 
+            FROM private_messages pm 
+            LEFT JOIN security_keys sk ON pm.user_id = sk.user_id 
+            ORDER BY pm.timestamp DESC LIMIT 50
+        """)
+        
+        messages = [{
+            "user": row[3] or f"User-{row[0][:6]}",  # Use username or fallback
+            "message": row[1],
+            "time": row[2],
+            "timestamp": row[2]
+        } for row in c.fetchall()]
+        
+        conn.close()
+        
+        print(f"Retrieved {len(messages)} private messages")
+        return jsonify({"messages": messages}), 200
+    except Exception as e:
+        print(f"Error retrieving private messages: {e}")
+        print(traceback.format_exc())
+        return jsonify({"messages": []}), 200
 
 # ==========================================
 # WebAuthn API Endpoints
@@ -860,8 +918,8 @@ def webauthn_auth_status():
 
 @app.route('/send_message', methods=['POST'])
 def send_message():
-    """Save a chat message to the database"""
-    print("\n=== MESSAGE SEND REQUEST ===")
+    """Save a public chat message to the database"""
+    print("\n=== PUBLIC MESSAGE SEND REQUEST ===")
     
     # Check authentication
     if not session.get('authenticated'):
@@ -879,7 +937,7 @@ def send_message():
         return jsonify({"error": "Message cannot be empty"}), 400
     
     user_id = session.get('user_id')
-    print(f"Message from user: {user_id}")
+    print(f"Public message from user: {user_id}")
     print(f"Message content: {message[:50]}...")
     
     try:
@@ -894,11 +952,55 @@ def send_message():
         c.execute("INSERT INTO messages (user_id, message) VALUES (?, ?)", 
                 (user_id, message))
         conn.commit()
-        print("✅ Message saved successfully")
+        print("✅ Public message saved successfully")
         conn.close()
         return jsonify({"success": True}), 200
     except Exception as e:
-        print(f"❌ Error saving message: {e}")
+        print(f"❌ Error saving public message: {e}")
+        print("Stack trace:", traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/send_private_message', methods=['POST'])
+def send_private_message():
+    """Save a private chat message to the database (authenticated users only)"""
+    print("\n=== PRIVATE MESSAGE SEND REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    data = request.get_json()
+    if not data or 'message' not in data:
+        print("❌ Invalid request - no message")
+        return jsonify({"error": "Message is required"}), 400
+    
+    message = data['message']
+    if not message.strip():
+        print("❌ Empty message")
+        return jsonify({"error": "Message cannot be empty"}), 400
+    
+    user_id = session.get('user_id')
+    print(f"Private message from user: {user_id}")
+    print(f"Message content: {message[:50]}...")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Get the user's current username
+        c.execute("SELECT username FROM security_keys WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        username = result[0] if result else f"User-{user_id[:6]}"
+    
+        c.execute("INSERT INTO private_messages (user_id, message) VALUES (?, ?)", 
+                (user_id, message))
+        conn.commit()
+        print("✅ Private message saved successfully")
+        conn.close()
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        print(f"❌ Error saving private message: {e}")
         print("Stack trace:", traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 

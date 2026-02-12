@@ -29,16 +29,27 @@
 
         <!-- Chat Section -->
         <div class="chat-section">
-            <div id="message-list" class="message-list" style="display: none;">
-                <div class="message-item">
-                    <strong>System</strong>: Welcome to the secure chat! Messages will appear here.
+            <!-- Public Chat - Visible to all users -->
+            <div class="public-chat-container">
+                <h2>Public Chat</h2>
+                <p class="chat-description">View messages from all users. Login to send messages.</p>
+                <div id="public-messages" class="messages-container"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="public-message-input" placeholder="Login to send messages..." autocomplete="off">
+                    <button id="public-send-button">Send</button>
                 </div>
             </div>
-            
-            <form id="chat-form" class="chat-form" style="display: none;">
-                <input type="text" id="message-input" placeholder="Type your message here..." autocomplete="off">
-                <button type="submit">Send</button>
-            </form>
+
+            <!-- Private Chat - Only visible when logged in -->
+            <div id="private-chat-container" class="private-chat-container" style="display: none;">
+                <h2>Private Chat</h2>
+                <p class="chat-description">Secure chat for registered users only.</p>
+                <div id="private-messages" class="messages-container"></div>
+                <div class="chat-input-container">
+                    <input type="text" id="private-message-input" placeholder="Type your message here..." autocomplete="off">
+                    <button id="private-send-button">Send</button>
+                </div>
+            </div>
         </div>
 
         <footer>
@@ -47,5 +58,7 @@
     </div>
 
     <script src="webauthn.js"></script>
+    <script src="publicchat.js"></script>
+    <script src="privatechat.js"></script>
 </body>
 </html> 

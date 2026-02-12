@@ -1,14 +1,15 @@
 /**
- * @file chat.js
+ * @file publicchat.js
  * @author Chris Becker, Jake McDowell, Jason Page
- * @date March 8, 2024
- * @description Chat functionality for FIDO2 Chat System
- *              Handles message sending, receiving, and UI updates
+ * @date February 12, 2026
+ * @description Public chat functionality for FIDO2 Chat System
+ *              Available to all users (including anonymous)
+ *              Handles message viewing and UI updates (read-only for anonymous users)
  */
 
-// Chat functionality
-const chat = {
-    // Server URL (same as in webauthn.js)
+// Public Chat functionality
+const publicChat = {
+    // Server URL
     SERVER_URL: 'https://render-authentication-project.onrender.com',
     
     // Message polling interval in ms
@@ -48,7 +49,7 @@ const chat = {
             }
         })
         .catch(error => {
-            console.error('Error loading messages:', error);
+            console.error('Error loading public messages:', error);
             this.showSystemMessage('Failed to load messages. Please try again later.');
         });
     },
@@ -68,8 +69,8 @@ const chat = {
             const messageElement = document.createElement('div');
             messageElement.classList.add('message');
             
-            // Check if message is from current user
-            const isCurrentUser = webAuthn.isAuthenticated && message.user === webAuthn.userId;
+            // Check if message is from current user (if authenticated)
+            const isCurrentUser = webAuthn && webAuthn.isAuthenticated && message.user === webAuthn.userId;
             messageElement.classList.add(isCurrentUser ? 'message-user' : 'message-other');
             
             // Create message content
@@ -113,8 +114,14 @@ const chat = {
         this.elements.messagesContainer.scrollTop = this.elements.messagesContainer.scrollHeight;
     },
     
-    // Send a message to the server
+    // Send a message to the server (only for authenticated users)
     sendMessage() {
+        // Check if user is authenticated
+        if (!webAuthn || !webAuthn.isAuthenticated) {
+            this.showSystemMessage('You must be logged in to send messages.');
+            return;
+        }
+        
         const message = this.elements.messageInput.value.trim();
         
         if (message === '') {
@@ -174,47 +181,75 @@ const chat = {
         }
     },
     
+    // Update UI based on authentication status
+    updateUIForAuthStatus() {
+        const isAuthenticated = webAuthn && webAuthn.isAuthenticated;
+        
+        if (this.elements.messageInput && this.elements.sendButton) {
+            if (isAuthenticated) {
+                this.elements.messageInput.disabled = false;
+                this.elements.sendButton.disabled = false;
+                this.elements.messageInput.placeholder = 'Type your message here...';
+            } else {
+                this.elements.messageInput.disabled = true;
+                this.elements.sendButton.disabled = true;
+                this.elements.messageInput.placeholder = 'Login to send messages...';
+            }
+        }
+    },
+    
     // Initialize chat functionality
     init() {
         // Get references to DOM elements
-        this.elements.messagesContainer = document.getElementById('messages');
-        this.elements.messageInput = document.getElementById('message-input');
-        this.elements.sendButton = document.getElementById('send-button');
+        this.elements.messagesContainer = document.getElementById('public-messages');
+        this.elements.messageInput = document.getElementById('public-message-input');
+        this.elements.sendButton = document.getElementById('public-send-button');
         
-        // Set up event listeners
-        this.elements.sendButton.addEventListener('click', () => this.sendMessage());
-        this.elements.messageInput.addEventListener('keydown', event => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                this.sendMessage();
-            }
-        });
+        // Check if elements exist
+        if (!this.elements.messagesContainer) {
+            console.warn('Public chat container not found. Public chat will not be initialized.');
+            return;
+        }
+        
+        // Set up event listeners if input elements exist
+        if (this.elements.sendButton) {
+            this.elements.sendButton.addEventListener('click', () => this.sendMessage());
+        }
+        
+        if (this.elements.messageInput) {
+            this.elements.messageInput.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    this.sendMessage();
+                }
+            });
+        }
         
         // Listen for authentication events
         document.addEventListener('userAuthenticated', () => {
+            this.updateUIForAuthStatus();
             this.loadMessages();
-            this.startPolling();
-            this.elements.messageInput.disabled = false;
-            this.elements.sendButton.disabled = false;
+            if (!this.pollingTimer) {
+                this.startPolling();
+            }
         });
         
         document.addEventListener('userLoggedOut', () => {
-            this.stopPolling();
-            this.elements.messageInput.disabled = true;
-            this.elements.sendButton.disabled = true;
+            this.updateUIForAuthStatus();
         });
+        
+        // Update UI based on current auth status
+        this.updateUIForAuthStatus();
         
         // Load initial messages (viewable by all)
         this.loadMessages();
         
-        // Start polling if authenticated
-        if (webAuthn.isAuthenticated) {
-            this.startPolling();
-        }
+        // Start polling for all users (messages are public)
+        this.startPolling();
     }
 };
 
-// Initialize chat when the page loads
+// Initialize public chat when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    chat.init();
-}); 
+    publicChat.init();
+});
