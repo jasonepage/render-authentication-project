@@ -1,18 +1,42 @@
 /**
+ * ============================================================================
+ * PUBLIC CHAT HANDLER - Protest Chat
+ * ============================================================================
  * @file publicchat.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date February 12, 2026
  * @description Public chat functionality for Protest Chat
- *              Available to all users (including anonymous)
- *              Secure communication for activists and protesters
+ *              
+ * VISIBILITY: All users (authenticated and anonymous) can view messages
+ * POSTING: Only authenticated users with security keys can send messages
+ * 
+ * DEPLOYMENT CONFIGURATION:
+ * 1. Update SERVER_URL below to match your deployment domain
+ * 2. Adjust POLLING_INTERVAL if you want different refresh rates
+ * 
+ * FEATURES:
+ * - Real-time message updates via polling
+ * - Auto-scroll to latest messages
+ * - Authentication-aware UI (shows/hides send button)
+ * - Rate limiting and error handling
+ * 
+ * INTEGRATION:
+ * - Requires webauthn.js for authentication state
+ * - Listens for 'userAuthenticated' and 'userLoggedOut' events
+ * - Auto-initializes when DOM loads
+ * ============================================================================
  */
 
 // Public Chat functionality
 const publicChat = {
-    // Server URL
-    SERVER_URL: 'https://render-authentication-project.onrender.com',
+    // ========================================================================
+    // CONFIGURATION - Update for your deployment
+    // ========================================================================
     
-    // Message polling interval in ms
+    // Server URL - CHANGE THIS to your deployment domain
+    SERVER_URL: 'https://render-authentication-project.onrender.com',  // TODO: Update this!
+    
+    // Message polling interval in milliseconds (3000 = 3 seconds)
     POLLING_INTERVAL: 3000,
     
     // References to DOM elements

@@ -1,9 +1,31 @@
 /**
+ * ============================================================================
+ * WEBAUTHN CLIENT - Protest Chat Security Key Authentication
+ * ============================================================================
  * @file webauthn.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date March 8, 2024
  * @description Core WebAuthn functionality for Protest Chat
  *              Handles registration, authentication, and key management
+ * 
+ * DEPLOYMENT CONFIGURATION:
+ * No changes needed for most deployments - this file auto-detects your domain.
+ * 
+ * If you need to customize the API endpoint path, update the getEndpointPath()
+ * function below.
+ * 
+ * FEATURES:
+ * - Physical security key registration (YubiKey, Titan, etc.)
+ * - Cross-platform authentication
+ * - Automatic re-authentication for existing keys
+ * - Detailed debug logging (toggle debugMode below)
+ * - Rate limiting and error handling
+ * 
+ * EVENTS DISPATCHED:
+ * - userAuthenticated: Fired when user logs in (detail: {userId})
+ * - userLoggedOut: Fired when user logs out
+ * 
+ * ============================================================================
  */
 
 /**
@@ -13,7 +35,11 @@
 const webAuthn = {
     version: '1.6.0',
     
-    // Enable debug mode to see all logs
+    // ========================================================================
+    // CONFIGURATION - Customize for your deployment if needed
+    // ========================================================================
+    
+    // Enable debug mode to see all logs (set to false in production for performance)
     debugMode: true,
     
     // Store current user ID when authenticated
@@ -25,9 +51,21 @@ const webAuthn = {
         userId: null
     },
     
-    // Simplified endpoint path function
+    // ========================================================================
+    // ENDPOINT CONFIGURATION
+    // ========================================================================
+    
+    /**
+     * Get the full path for an API endpoint
+     * @param {string} endpoint - The endpoint name (e.g., 'register_options')
+     * @returns {string} Full URL path to the endpoint
+     * 
+     * CUSTOMIZATION: If your API is on a different domain or path, update this.
+     * Default: Uses same origin as the web page (window.location.origin)
+     */
     getEndpointPath: function(endpoint) {
         // Always use root path for simplicity and consistency
+        // For custom API domains: return `https://api.yourdomain.com/${endpoint}`;
         return `/${endpoint}`;
     },
     
@@ -247,26 +285,12 @@ const webAuthn = {
             });
             const statusData = await statusResponse.json();
             
-            let slotCode = null;
-            if (statusData.requiresSlotCode) {
-                // Ask for registration code
-                slotCode = prompt(
-                    `Registration requires an admin invitation code.\n\n` +
-                    `${statusData.totalUsers} users registered (admins manage invites).\n\n` +
-                    `Enter your invitation code:`
-                );
-                
-                if (!slotCode) {
-                    alert('Registration cancelled. You need an invitation code from an admin.');
-                    return;
-                }
-            } else {
-                // First 2 users - show admin message
-                this.log(`Open registration: User ${statusData.totalUsers + 1}/2 will become admin`);
+            if (!statusData.canRegister) {
+                alert(`Registration is closed.\n\n${statusData.message}`);
+                return;
             }
             
-            // Store slot code for later use
-            this.pendingSlotCode = slotCode;
+            this.log(`Registration allowed: ${statusData.totalUsers}/25 users`);
         } catch (error) {
             this.logError('Error checking registration status:', error);
             alert('Failed to check registration status. Please try again.');
@@ -310,8 +334,7 @@ const webAuthn = {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ 
-                    timestamp: Date.now(),
-                    slotCode: this.pendingSlotCode
+                    timestamp: Date.now()
                 })
             },
             response => {
@@ -474,9 +497,6 @@ const webAuthn = {
                     userId: result.userId
                 };
                 
-                // Store admin status
-                this.isUserAdmin = result.isAdmin || false;
-                
                 // Update the UI to reflect the authenticated state with the existing user
                 this.updateUI(true, result.userId);
                 
@@ -489,15 +509,11 @@ const webAuthn = {
                     userId: result.userId
                 };
                 
-                // Store admin status
-                this.isUserAdmin = result.isAdmin || false;
-                
                 // Update the UI to reflect the authenticated state
                 this.updateUI(true, result.userId);
                 
                 // Alert the user
-                const adminMessage = result.isAdmin ? '\n\n🔑 You are an ADMIN - You can create registration codes for others!' : '';
-                alert(`Security key registered successfully!${adminMessage}`);
+                alert('Security key registered successfully!');
             }
         })
         .catch(error => {
@@ -635,9 +651,6 @@ const webAuthn = {
             this.log(`Login complete, result:`, result);
             this.hideModal();
             
-            // Store admin status
-            this.isUserAdmin = result.isAdmin || false;
-            
             // Update the UI to reflect the authenticated state
             this.updateUI(true, result.userId);
             
@@ -645,8 +658,7 @@ const webAuthn = {
             this.currentUserId = result.userId;
             
             // Alert the user
-            const adminMessage = result.isAdmin ? ' (Admin access granted)' : '';
-            alert(`Login successful!${adminMessage}`);
+            alert('Login successful!');
         })
         .catch(error => {
             this.log(`Login error: ${error.message}`);
@@ -764,8 +776,7 @@ const webAuthn = {
             // Dispatch event that user is authenticated
             document.dispatchEvent(new CustomEvent('userAuthenticated', { 
                 detail: { 
-                    userId: userId,
-                    isAdmin: this.isUserAdmin || false
+                    userId: userId
                 }
             }));
         } else {

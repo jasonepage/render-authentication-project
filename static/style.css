@@ -1,25 +1,58 @@
-/* Dark Mode Twitter-Style Protest Chat */
+/**
+ * ============================================================================
+ * PROTEST CHAT - Dark Mode Twitter-Style UI
+ * ============================================================================
+ * @file style.css
+ * @author Chris Becker, Jake McDowell, Jason Page
+ * @date February 12, 2026
+ * @description Dark mode styling inspired by Twitter's UI for protest chat
+ * 
+ * CUSTOMIZATION:
+ * Change the CSS variables in :root{} below to customize colors and theme.
+ * All colors are defined as variables for easy customization.
+ * 
+ * COLOR SCHEME:
+ * - Dark backgrounds for reduced eye strain
+ * - High contrast text for readability
+ * - Blue accents for interactive elements
+ * - Red for dangerous actions (logout)
+ * - Green for success states
+ * - Purple for special features
+ * 
+ * RESPONSIVE:
+ * - Mobile-first design
+ * - Adapts to tablet and desktop screens
+ * - Touch-friendly buttons and inputs
+ * ============================================================================
+ */
+
+/* ============================================================================
+   COLOR PALETTE - Customize your theme here
+   ============================================================================ */
 
 :root {
-    /* Dark mode colors - Twitter inspired */
-    --bg-primary: #15202b;
-    --bg-secondary: #192734;
-    --bg-hover: #1e2732;
-    --border-color: #38444d;
+    /* Dark mode background colors - Twitter inspired */
+    --bg-primary: #15202b;        /* Main background */
+    --bg-secondary: #192734;      /* Cards, containers */
+    --bg-hover: #1e2732;          /* Hover states */
+    --border-color: #38444d;      /* Borders and dividers */
     
-    --text-primary: #ffffff;
-    --text-secondary: #8899a6;
-    --text-tertiary: #6e767d;
+    /* Text colors */
+    --text-primary: #ffffff;      /* Main text (white) */
+    --text-secondary: #8899a6;    /* Secondary text (gray) */
+    --text-tertiary: #6e767d;     /* Tertiary text (darker gray) */
     
-    --accent-blue: #1da1f2;
-    --accent-blue-hover: #1a8cd8;
-    --accent-green: #17bf63;
-    --accent-red: #f4212e;
-    --accent-purple: #7856ff;
+    /* Accent colors */
+    --accent-blue: #1da1f2;       /* Primary actions (buttons, links) */
+    --accent-blue-hover: #1a8cd8; /* Button hover */
+    --accent-green: #17bf63;      /* Success states */
+    --accent-red: #f4212e;        /* Danger actions (logout) */
+    --accent-purple: #7856ff;     /* Special features */
     
-    --message-bg: #192734;
-    --message-own: #1e3a52;
-    --message-hover: #1e2732;
+    /* Message colors */
+    --message-bg: #192734;        /* Default message background */
+    --message-own: #1e3a52;       /* Your own messages */
+    --message-hover: #1e2732;     /* Message hover state */
 }
 
 /* Base styles */
@@ -339,6 +372,7 @@ button:disabled {
     transition: background-color 0.2s;
     max-width: 100%;
     word-wrap: break-word;
+    background-color: transparent;
 }
 
 .message:hover {
@@ -346,10 +380,12 @@ button:disabled {
 }
 
 .message-meta {
+    color: var(--text-secondary);
+    font-size: 13px;
     display: flex;
     align-items: center;
+    gap: 8px;
     margin-bottom: 8px;
-    font-size: 15px;
 }
 
 .message-meta::before {
@@ -366,11 +402,8 @@ button:disabled {
     background: linear-gradient(135deg, var(--accent-green), var(--accent-blue));
 }
 
-.message-meta {
-    color: var(--text-secondary);
-    font-size: 13px;
-    display: flex;
-    gap: 8px;
+.message-other .message-meta::before {
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
 }
 
 .message > div:first-child {
@@ -395,11 +428,20 @@ button:disabled {
 
 .message > div:nth-child(2) {
     margin-left: 52px;
-    color: var(--text-primary);
+    color: var(--text-primary) !important;
     font-size: 15px;
     line-height: 1.5;
     word-wrap: break-word;
     white-space: pre-wrap;
+}
+
+/* Ensure all message text is readable */
+.message div {
+    color: var(--text-primary);
+}
+
+.message .message-meta {
+    color: var(--text-secondary);
 }
 
 .message-system {

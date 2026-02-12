@@ -1,18 +1,45 @@
 /**
+ * ============================================================================
+ * PRIVATE CHAT HANDLER - Protest Chat
+ * ============================================================================
  * @file privatechat.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date February 12, 2026
  * @description Private chat functionality for Protest Chat
- *              Only available to registered activists with physical security keys
- *              Maximum security for sensitive protest coordination
+ *              
+ * VISIBILITY: Only authenticated users with physical security keys
+ * POSTING: Only authenticated users with security keys can send messages
+ * SECURITY: Maximum security for sensitive protest coordination
+ * 
+ * DEPLOYMENT CONFIGURATION:
+ * 1. Update SERVER_URL below to match your deployment domain
+ * 2. Adjust POLLING_INTERVAL if you want different refresh rates
+ * 
+ * FEATURES:
+ * - Authenticated-only access (auto-hides when not logged in)
+ * - Real-time message updates via polling
+ * - Auto-scroll to latest messages
+ * - Secure endpoint (requires valid session)
+ * - Rate limiting and error handling
+ * 
+ * INTEGRATION:
+ * - Requires webauthn.js for authentication state
+ * - Listens for 'userAuthenticated' and 'userLoggedOut' events
+ * - Auto-initializes when DOM loads
+ * - Shows/hides based on authentication status
+ * ============================================================================
  */
 
 // Private Chat functionality
 const privateChat = {
-    // Server URL
-    SERVER_URL: 'https://render-authentication-project.onrender.com',
+    // ========================================================================
+    // CONFIGURATION - Update for your deployment
+    // ========================================================================
     
-    // Message polling interval in ms
+    // Server URL - CHANGE THIS to your deployment domain
+    SERVER_URL: 'https://render-authentication-project.onrender.com',  // TODO: Update this!
+    
+    // Message polling interval in milliseconds (3000 = 3 seconds)
     POLLING_INTERVAL: 3000,
     
     // References to DOM elements
