@@ -1,4 +1,4 @@
-/* Dark Mode Twitter-Style FIDO2 Chat System */
+/* Dark Mode Twitter-Style Protest Chat */
 
 :root {
     /* Dark mode colors - Twitter inspired */
@@ -122,6 +122,89 @@ button:disabled {
     flex-wrap: wrap;
     justify-content: center;
     margin-top: 16px;
+}
+
+/* Admin Panel */
+.admin-panel {
+    background-color: var(--bg-secondary);
+    border: 2px solid var(--accent-purple);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.admin-panel h2 {
+    color: var(--accent-purple);
+    font-size: 20px;
+    font-weight: 800;
+    margin-bottom: 12px;
+}
+
+.admin-panel p {
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+.admin-button {
+    background-color: var(--accent-purple);
+    border-color: var(--accent-purple);
+    margin-bottom: 20px;
+}
+
+.admin-button:hover {
+    background-color: #6b46e5;
+}
+
+.slot-list {
+    max-height: 300px;
+    overflow-y: auto;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.slot-item {
+    background-color: var(--bg-hover);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.slot-item:last-child {
+    margin-bottom: 0;
+}
+
+.slot-code {
+    font-family: 'Courier New', monospace;
+    background-color: var(--bg-primary);
+    color: var(--accent-green);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    display: inline-block;
+    margin: 8px 0;
+    word-break: break-all;
+}
+
+.slot-status {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 700;
+    margin-left: 8px;
+}
+
+.slot-status.unused {
+    background-color: var(--accent-green);
+    color: white;
+}
+
+.slot-status.used {
+    background-color: var(--border-color);
+    color: var(--text-tertiary);
 }
 
 /* User info display */

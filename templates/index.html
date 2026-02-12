@@ -9,12 +9,20 @@
 <body>
     <div class="container">
         <header>
-            <h1>FIDO2 Chat System</h1>
+            <h1>🔒 Protest Chat</h1>
         </header>
 
         <!-- Authentication Status Section -->
         <div id="auth-status" class="auth-section">
             <p>Checking authentication status...</p>
+        </div>
+
+        <!-- Admin Panel - Only visible for admins -->
+        <div id="admin-panel" class="admin-panel" style="display: none;">
+            <h2>🔑 Admin Panel</h2>
+            <p>Create registration codes for new activists</p>
+            <button id="create-slot-button" class="admin-button">Generate Registration Code</button>
+            <div id="slot-list" class="slot-list"></div>
         </div>
 
         <!-- Modal for Authentication Operations -->
@@ -51,12 +59,13 @@
         </div>
 
         <footer>
-            <p>Protest Chat - Secure FIDO2 Authentication | Physical Security Keys Only</p>
+            <p>Protest Chat - Secure Authentication | Physical Security Keys Only</p>
         </footer>
     </div>
 
     <script src="webauthn.js"></script>
     <script src="publicchat.js"></script>
     <script src="privatechat.js"></script>
+    <script src="admin.js"></script>
 </body>
 </html> 

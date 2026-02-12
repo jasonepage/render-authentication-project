@@ -102,7 +102,21 @@ def init_db():
         combined_key_hash TEXT,
         resident_key BOOLEAN,
         created_at TIMESTAMP NOT NULL,
-        username TEXT
+        username TEXT,
+        is_admin BOOLEAN DEFAULT 0
+    )
+    ''')
+    
+    # Create registration_slots table to control who can register
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registration_slots (
+        id INTEGER PRIMARY KEY,
+        slot_code TEXT UNIQUE NOT NULL,
+        created_by_admin TEXT,
+        used_by_user TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        used_at TIMESTAMP,
+        is_used BOOLEAN DEFAULT 0
     )
     ''')
     
@@ -140,6 +154,41 @@ init_db()
 # ==========================================
 # Utility functions
 # ==========================================
+
+def is_admin(user_id):
+    """Check if a user is an admin"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT is_admin FROM security_keys WHERE user_id = ?", (user_id,))
+        result = c.fetchone()
+        conn.close()
+        return result and result[0] == 1
+    except Exception as e:
+        print(f"Error checking admin status: {e}")
+        return False
+
+def get_total_users():
+    """Get total number of registered users"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM security_keys")
+        count = c.fetchone()[0]
+        conn.close()
+        return count
+    except Exception as e:
+        print(f"Error getting user count: {e}")
+        return 0
+
+def can_register():
+    """Check if registration is currently allowed"""
+    total_users = get_total_users()
+    # First 2 users can always register (they become admins)
+    if total_users < 2:
+        return True, None
+    # After that, need a valid registration slot
+    return False, "Registration requires an admin invitation code"
 
 def rate_limit(max_per_minute=60):
     """Rate limiting decorator"""
@@ -484,6 +533,39 @@ def webauthn_register_options():
     try:
         print("\n⭐ WEBAUTHN REGISTRATION OPTIONS ⭐")
         
+        # Check if registration is allowed
+        data = request.get_json() or {}
+        slot_code = data.get('slotCode')
+        
+        can_reg, error_msg = can_register()
+        
+        if not can_reg:
+            # Registration requires a slot code
+            if not slot_code:
+                print("❌ Registration requires invitation code")
+                return jsonify({"error": "Registration requires an admin invitation code"}), 403
+            
+            # Validate the slot code
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT id, is_used FROM registration_slots WHERE slot_code = ?", (slot_code,))
+            slot = c.fetchone()
+            conn.close()
+            
+            if not slot:
+                print(f"❌ Invalid registration code: {slot_code}")
+                return jsonify({"error": "Invalid invitation code"}), 403
+            
+            if slot[1]:  # is_used
+                print(f"❌ Registration code already used: {slot_code}")
+                return jsonify({"error": "This invitation code has already been used"}), 403
+            
+            # Store slot code in session for completion
+            session['registration_slot_code'] = slot_code
+            print(f"✅ Valid registration slot code: {slot_code}")
+        else:
+            print(f"✅ Registration allowed (first {get_total_users()}/2 admins)")
+        
         # Generate a unique user ID for this registration
         # Use bytes directly for better Base64URL encoding compatibility
         user_id_raw = secrets.token_bytes(16)  # 16 bytes = 128 bits of randomness
@@ -628,6 +710,11 @@ def webauthn_register_complete():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
+        # Check total users to determine if this should be an admin
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM security_keys")
+        total_users = cursor.fetchone()[0]
+        is_new_admin = total_users < 2  # First 2 users are admins
+        
         # Normalize the credential ID to ensure consistent storage format
         normalized_credential_id = normalize_credential_id(credential_id)
         
@@ -638,14 +725,25 @@ def webauthn_register_complete():
         else:
             # Store with all the key identifiers
             print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
+            print(f"Register Complete: User is {'ADMIN' if is_new_admin else 'REGULAR USER'}")
             cursor.execute(
                 """INSERT INTO security_keys 
                    (credential_id, user_id, public_key, aaguid, attestation_hash, 
-                    combined_key_hash, resident_key, created_at) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    combined_key_hash, resident_key, created_at, is_admin) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
                 (normalized_credential_id, user_id, public_key, aaguid, 
-                 attestation_hash, combined_key_hash, resident_key)
+                 attestation_hash, combined_key_hash, resident_key, 1 if is_new_admin else 0)
             )
+            
+            # If a slot code was used, mark it as used
+            slot_code = session.get('registration_slot_code')
+            if slot_code:
+                cursor.execute(
+                    "UPDATE registration_slots SET is_used = 1, used_by_user = ?, used_at = datetime('now') WHERE slot_code = ?",
+                    (user_id, slot_code)
+                )
+                session.pop('registration_slot_code', None)
+                print(f"Register Complete: Marked slot code as used: {slot_code}")
         
         conn.commit()
         conn.close()
@@ -653,13 +751,15 @@ def webauthn_register_complete():
         # Set authenticated session and clean up registration data
         session['authenticated'] = True
         session['user_id'] = user_id
+        session['is_admin'] = is_new_admin
         # Clear the registration-specific data to prevent reuse
         session.pop('user_id_for_registration', None)
         print(f"Register Complete: Session updated")
         
         return jsonify({
             'status': 'success',
-            'userId': user_id
+            'userId': user_id,
+            'isAdmin': is_new_admin
         })
         
     except Exception as e:
@@ -851,13 +951,20 @@ def webauthn_login_complete():
             print("Login Error: Signature verification failed")
             return jsonify({'error': 'Invalid signature'}), 400
         
+        # Check if user is admin
+        user_is_admin = is_admin(user_id)
+        
         # Set session
         session['authenticated'] = True
         session['user_id'] = user_id
+        session['is_admin'] = user_is_admin
+        
+        print(f"Login Complete: User is {'ADMIN' if user_is_admin else 'REGULAR USER'}")
         
         return jsonify({
             'status': 'success',
-            'userId': user_id
+            'userId': user_id,
+            'isAdmin': user_is_admin
         })
         
     except Exception as e:
@@ -1008,6 +1115,100 @@ def send_private_message():
 # ==========================================
 # Admin functionality
 # ==========================================
+
+@app.route('/admin/create_registration_slot', methods=['POST'])
+def create_registration_slot():
+    """Admin endpoint to create a new registration slot"""
+    print("\n=== ADMIN: CREATE REGISTRATION SLOT ===")
+    
+    # Check authentication and admin status
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    user_id = session.get('user_id')
+    if not is_admin(user_id):
+        print(f"❌ User {user_id} is not an admin")
+        return jsonify({"error": "Admin privileges required"}), 403
+    
+    try:
+        # Generate a unique slot code
+        slot_code = secrets.token_urlsafe(16)
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO registration_slots (slot_code, created_by_admin) VALUES (?, ?)",
+            (slot_code, user_id)
+        )
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Created registration slot: {slot_code}")
+        return jsonify({
+            "success": True,
+            "slotCode": slot_code,
+            "message": "Registration code created successfully"
+        }), 200
+    except Exception as e:
+        print(f"❌ Error creating registration slot: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/admin/list_slots', methods=['GET'])
+def list_registration_slots():
+    """Admin endpoint to list all registration slots"""
+    print("\n=== ADMIN: LIST REGISTRATION SLOTS ===")
+    
+    # Check authentication and admin status
+    if not session.get('authenticated'):
+        return jsonify({"error": "Authentication required"}), 401
+    
+    user_id = session.get('user_id')
+    if not is_admin(user_id):
+        return jsonify({"error": "Admin privileges required"}), 403
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            SELECT slot_code, created_by_admin, used_by_user, created_at, used_at, is_used
+            FROM registration_slots
+            ORDER BY created_at DESC
+        """)
+        
+        slots = [{
+            "code": row[0],
+            "createdBy": row[1],
+            "usedBy": row[2],
+            "createdAt": row[3],
+            "usedAt": row[4],
+            "isUsed": bool(row[5])
+        } for row in c.fetchall()]
+        
+        conn.close()
+        return jsonify({"slots": slots}), 200
+    except Exception as e:
+        print(f"❌ Error listing slots: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/check_registration_status', methods=['GET'])
+def check_registration_status():
+    """Check if registration is currently allowed and user's admin status"""
+    can_reg, error_msg = can_register()
+    total_users = get_total_users()
+    
+    is_user_admin = False
+    if session.get('authenticated'):
+        user_id = session.get('user_id')
+        is_user_admin = is_admin(user_id)
+    
+    return jsonify({
+        "canRegister": can_reg,
+        "totalUsers": total_users,
+        "isAdmin": is_user_admin,
+        "requiresSlotCode": not can_reg,
+        "message": error_msg if not can_reg else "Open registration for first 2 admins"
+    }), 200
 
 @app.route('/debug_all', methods=['GET'])
 def debug_all():

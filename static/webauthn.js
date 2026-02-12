@@ -2,7 +2,7 @@
  * @file webauthn.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date March 8, 2024
- * @description Core WebAuthn functionality for FIDO2 Chat System
+ * @description Core WebAuthn functionality for Protest Chat
  *              Handles registration, authentication, and key management
  */
 
@@ -240,6 +240,39 @@ const webAuthn = {
     registerKey: async function() {
         this.log('Starting registration process');
         
+        // Check registration status first
+        try {
+            const statusResponse = await fetch(this.getEndpointPath('check_registration_status'), {
+                credentials: 'include'
+            });
+            const statusData = await statusResponse.json();
+            
+            let slotCode = null;
+            if (statusData.requiresSlotCode) {
+                // Ask for registration code
+                slotCode = prompt(
+                    `Registration requires an admin invitation code.\n\n` +
+                    `${statusData.totalUsers} users registered (admins manage invites).\n\n` +
+                    `Enter your invitation code:`
+                );
+                
+                if (!slotCode) {
+                    alert('Registration cancelled. You need an invitation code from an admin.');
+                    return;
+                }
+            } else {
+                // First 2 users - show admin message
+                this.log(`Open registration: User ${statusData.totalUsers + 1}/2 will become admin`);
+            }
+            
+            // Store slot code for later use
+            this.pendingSlotCode = slotCode;
+        } catch (error) {
+            this.logError('Error checking registration status:', error);
+            alert('Failed to check registration status. Please try again.');
+            return;
+        }
+        
         // Check external key support before proceeding
         const externalKeySupport = await this.checkExternalKeySupport();
         if (!externalKeySupport) {
@@ -276,7 +309,10 @@ const webAuthn = {
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ timestamp: Date.now() })
+                body: JSON.stringify({ 
+                    timestamp: Date.now(),
+                    slotCode: this.pendingSlotCode
+                })
             },
             response => {
                 if (!response.ok) {
@@ -438,6 +474,9 @@ const webAuthn = {
                     userId: result.userId
                 };
                 
+                // Store admin status
+                this.isUserAdmin = result.isAdmin || false;
+                
                 // Update the UI to reflect the authenticated state with the existing user
                 this.updateUI(true, result.userId);
                 
@@ -450,11 +489,15 @@ const webAuthn = {
                     userId: result.userId
                 };
                 
+                // Store admin status
+                this.isUserAdmin = result.isAdmin || false;
+                
                 // Update the UI to reflect the authenticated state
                 this.updateUI(true, result.userId);
                 
                 // Alert the user
-                alert('Security key registered successfully!');
+                const adminMessage = result.isAdmin ? '\n\n🔑 You are an ADMIN - You can create registration codes for others!' : '';
+                alert(`Security key registered successfully!${adminMessage}`);
             }
         })
         .catch(error => {
@@ -592,6 +635,9 @@ const webAuthn = {
             this.log(`Login complete, result:`, result);
             this.hideModal();
             
+            // Store admin status
+            this.isUserAdmin = result.isAdmin || false;
+            
             // Update the UI to reflect the authenticated state
             this.updateUI(true, result.userId);
             
@@ -599,7 +645,8 @@ const webAuthn = {
             this.currentUserId = result.userId;
             
             // Alert the user
-            alert('Login successful!');
+            const adminMessage = result.isAdmin ? ' (Admin access granted)' : '';
+            alert(`Login successful!${adminMessage}`);
         })
         .catch(error => {
             this.log(`Login error: ${error.message}`);
@@ -716,7 +763,10 @@ const webAuthn = {
             
             // Dispatch event that user is authenticated
             document.dispatchEvent(new CustomEvent('userAuthenticated', { 
-                detail: { userId: userId }
+                detail: { 
+                    userId: userId,
+                    isAdmin: this.isUserAdmin || false
+                }
             }));
         } else {
             // Display unauthenticated state with registration and login buttons
