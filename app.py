@@ -337,46 +337,34 @@ def extract_attestation_info(attestation_object_base64):
         print(traceback.format_exc())
         return (None, None, None, False)
 
-def find_existing_user_by_key_identifiers(aaguid, combined_key_hash):
+def find_existing_user_by_credential_id(credential_id):
     """
-    Check if a physical key is already registered by looking at its identifiers
+    Check if a credential_id is already registered
     Returns user_id if found, None otherwise
+    
+    The credential_id is unique per physical key - it's all we need!
     """
-    if not aaguid and not combined_key_hash:
-        print("DEBUG - No key identifiers provided for lookup")
+    if not credential_id:
+        print("DEBUG - No credential_id provided for lookup")
         return None
     
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Special handling for Identiv keys
-        is_identiv = aaguid and aaguid.startswith("identiv-")
+        # Normalize the credential ID for consistent comparison
+        normalized_id = normalize_credential_id(credential_id)
         
-        # Try to find by combined hash first (more specific)
-        if combined_key_hash:
-            cursor.execute("SELECT user_id FROM security_keys WHERE combined_key_hash = ?", (combined_key_hash,))
-            result = cursor.fetchone()
-            if result:
-                print(f"DEBUG - Found existing user by combined hash: {result[0]}")
-                conn.close()
-                return result[0]
+        # Check if this credential_id already exists
+        cursor.execute("SELECT user_id FROM security_keys WHERE credential_id = ?", (normalized_id,))
+        result = cursor.fetchone()
         
-        # Then try by AAGUID (for same model keys)
-        if aaguid:
-            # For Identiv keys, use a more specific query
-            if is_identiv:
-                print(f"DEBUG - Searching for Identiv key with identifier: {aaguid}")
-                cursor.execute("SELECT user_id FROM security_keys WHERE aaguid LIKE 'identiv-%'")
-            else:
-                cursor.execute("SELECT user_id FROM security_keys WHERE aaguid = ?", (aaguid,))
-                
-            result = cursor.fetchone()
-            if result:
-                print(f"DEBUG - Found existing user by AAGUID: {result[0]}")
-                conn.close()
-                return result[0]
+        if result:
+            print(f"DEBUG - Found existing user by credential_id: {result[0]}")
+            conn.close()
+            return result[0]
         
+        print(f"DEBUG - No existing user found with this credential_id")
         conn.close()
         return None
     except Exception as e:
@@ -686,10 +674,13 @@ def webauthn_register_complete():
         # Extract and format the public key
         public_key_pem = extract_public_key_from_attestation(attestation_object)
         
-        # Check if this physical key is already registered
-        existing_user_id = find_existing_user_by_key_identifiers(aaguid, combined_key_hash)
+        # Normalize the credential ID to ensure consistent storage format
+        normalized_credential_id = normalize_credential_id(credential_id)
         
-        print(f"Register Complete: Key identifiers - AAGUID: {aaguid}, Combined hash: {combined_key_hash}, Resident key: {resident_key}")
+        # Check if this exact credential_id is already registered
+        existing_user_id = find_existing_user_by_credential_id(normalized_credential_id)
+        
+        print(f"Register Complete: Normalized credential_id: {normalized_credential_id[:20]}...")
         print(f"Register Complete: Existing user found: {existing_user_id}")
         
         # If this key is already associated with a user, log in as that user instead
@@ -725,32 +716,24 @@ def webauthn_register_complete():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Normalize the credential ID to ensure consistent storage format
-        normalized_credential_id = normalize_credential_id(credential_id)
+        # Check if this is the first user (becomes admin/king)
+        cursor.execute("SELECT COUNT(*) FROM security_keys")
+        user_count = cursor.fetchone()[0]
+        is_admin = (user_count == 0)  # First user is admin
         
-        # Check if this exact credential ID already exists
-        cursor.execute("SELECT credential_id FROM security_keys WHERE credential_id = ?", (normalized_credential_id,))
-        if cursor.fetchone():
-            print(f"Register Complete: Credential ID already exists, skipping insertion")
-        else:
-            # Check if this is the first user (becomes admin/king)
-            cursor.execute("SELECT COUNT(*) FROM security_keys")
-            user_count = cursor.fetchone()[0]
-            is_admin = (user_count == 0)  # First user is admin
-            
-            if is_admin:
-                print(f"Register Complete: First user registered - granting admin privileges")
-            
-            # Store with all the key identifiers
-            print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
-            cursor.execute(
-                """INSERT INTO security_keys 
-                   (credential_id, user_id, public_key, aaguid, attestation_hash, 
-                    combined_key_hash, resident_key, created_at, is_admin) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
-                (normalized_credential_id, user_id, public_key, aaguid, 
-                 attestation_hash, combined_key_hash, resident_key, is_admin)
-            )
+        if is_admin:
+            print(f"Register Complete: First user registered - granting admin privileges")
+        
+        # Store with all the key identifiers (kept for debugging/analytics only)
+        print(f"Register Complete: Storing credential with ID: {normalized_credential_id[:20]}...")
+        cursor.execute(
+            """INSERT INTO security_keys 
+               (credential_id, user_id, public_key, aaguid, attestation_hash, 
+                combined_key_hash, resident_key, created_at, is_admin) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
+            (normalized_credential_id, user_id, public_key, aaguid, 
+             attestation_hash, combined_key_hash, resident_key, is_admin)
+        )
         
         conn.commit()
         conn.close()
