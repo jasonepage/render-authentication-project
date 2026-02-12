@@ -2,9 +2,9 @@
  * @file publicchat.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date February 12, 2026
- * @description Public chat functionality for FIDO2 Chat System
+ * @description Public chat functionality for Protest Chat
  *              Available to all users (including anonymous)
- *              Handles message viewing and UI updates (read-only for anonymous users)
+ *              Secure communication for activists and protesters
  */
 
 // Public Chat functionality

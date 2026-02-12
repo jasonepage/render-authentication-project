@@ -2,9 +2,9 @@
  * @file privatechat.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date February 12, 2026
- * @description Private chat functionality for FIDO2 Chat System
- *              Only available to registered/authenticated users
- *              Handles secure message sending, receiving, and UI updates
+ * @description Private chat functionality for Protest Chat
+ *              Only available to registered activists with physical security keys
+ *              Maximum security for sensitive protest coordination
  */
 
 // Private Chat functionality

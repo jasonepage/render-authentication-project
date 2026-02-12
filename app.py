@@ -1,8 +1,9 @@
 """
 # Author(s): Chris Becker, Jake McDowell, Jason Page
 # Date: March 8, 2024
-# Description: FIDO2/WebAuthn Chat System - Main Flask Application
-#             Handles authentication, chat functionality, and database operations
+# Description: Protest Chat - Secure Communication Platform
+#             FIDO2/WebAuthn authentication with physical security keys only
+#             Designed for activist and protester safety
 """
 
 from flask import Flask, jsonify, request, session, send_from_directory, render_template

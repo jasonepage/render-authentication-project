@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FIDO2 Chat System</title>
+    <title>Protest Chat - Secure Communication</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,10 +30,10 @@
             <!-- Public Chat - Visible to all users -->
             <div class="public-chat-container">
                 <h2>Public Chat</h2>
-                <p class="chat-description">View messages from all users. Login to send messages.</p>
+                <p class="chat-description">Open forum for all. Login with security key to send messages.</p>
                 <div id="public-messages" class="messages-container"></div>
                 <div class="chat-input-container">
-                    <input type="text" id="public-message-input" placeholder="Login to send messages..." autocomplete="off">
+                    <input type="text" id="public-message-input" placeholder="Login with security key to send..." autocomplete="off">
                     <button id="public-send-button">Send</button>
                 </div>
             </div>
@@ -41,17 +41,17 @@
             <!-- Private Chat - Only visible when logged in -->
             <div id="private-chat-container" class="private-chat-container" style="display: none;">
                 <h2>Private Chat</h2>
-                <p class="chat-description">Secure chat for registered users only.</p>
+                <p class="chat-description">Secure channel for verified activists only.</p>
                 <div id="private-messages" class="messages-container"></div>
                 <div class="chat-input-container">
-                    <input type="text" id="private-message-input" placeholder="Type your message here..." autocomplete="off">
+                    <input type="text" id="private-message-input" placeholder="Secure messaging..." autocomplete="off">
                     <button id="private-send-button">Send</button>
                 </div>
             </div>
         </div>
 
         <footer>
-            <p>FIDO2 WebAuthn Authentication Platform</p>
+            <p>Protest Chat - Secure FIDO2 Authentication | Physical Security Keys Only</p>
         </footer>
     </div>
 
