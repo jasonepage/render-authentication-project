@@ -1151,12 +1151,10 @@ const webAuthn = {
         if (env.isIOS) {
             this.log('iOS-specific optimizations will be applied');
         }
-                        // CRITICAL: cross-platform = ONLY physical security keys
-                        // This blocks Face ID, Touch ID, Windows Hello, etc.
-                        authenticatorAttachment: "cross-platform",
-                        requireResidentKey: true,
-                        residentKey: "required",
-                        userVerification: "discouraged"
+        
+        // Check authentication status
+        this.checkAuthStatus().then(status => {
+            if (status.authenticated) {
                 this.log('User is already authenticated, restoring session');
                 // Start message polling if authenticated
                 this.startMessagePolling();
