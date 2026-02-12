@@ -70,7 +70,7 @@ const publicChat = {
             messageElement.classList.add('message');
             
             // Check if message is from current user (if authenticated)
-            const isCurrentUser = webAuthn && webAuthn.isAuthenticated && message.user === webAuthn.userId;
+            const isCurrentUser = webAuthn && webAuthn.currentUserId && message.user === webAuthn.currentUserId;
             messageElement.classList.add(isCurrentUser ? 'message-user' : 'message-other');
             
             // Create message content
@@ -117,7 +117,7 @@ const publicChat = {
     // Send a message to the server (only for authenticated users)
     sendMessage() {
         // Check if user is authenticated
-        if (!webAuthn || !webAuthn.isAuthenticated) {
+        if (!webAuthn || !webAuthn.currentUserId) {
             this.showSystemMessage('You must be logged in to send messages.');
             return;
         }
@@ -183,7 +183,7 @@ const publicChat = {
     
     // Update UI based on authentication status
     updateUIForAuthStatus() {
-        const isAuthenticated = webAuthn && webAuthn.isAuthenticated;
+        const isAuthenticated = webAuthn && webAuthn.currentUserId;
         
         if (this.elements.messageInput && this.elements.sendButton) {
             if (isAuthenticated) {

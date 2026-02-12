@@ -542,7 +542,7 @@ def webauthn_register_options():
                 "userVerification": "discouraged"
             },
             "timeout": 120000,  # 2 minutes
-            "attestation": "direct"  # Request direct attestation to get AAGUID and other info
+            "attestation": "none"  # Use "none" to avoid privacy prompts about security key info
         }
         
         print(f"Register Options: Returning options...")

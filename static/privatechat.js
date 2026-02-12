@@ -32,7 +32,7 @@ const privateChat = {
     // Load messages from the server
     loadMessages() {
         // Only load if authenticated
-        if (!webAuthn || !webAuthn.isAuthenticated) {
+        if (!webAuthn || !webAuthn.currentUserId) {
             return;
         }
         
@@ -75,7 +75,7 @@ const privateChat = {
             messageElement.classList.add('message');
             
             // Check if message is from current user
-            const isCurrentUser = webAuthn.isAuthenticated && message.user === webAuthn.userId;
+            const isCurrentUser = webAuthn.currentUserId && message.user === webAuthn.currentUserId;
             messageElement.classList.add(isCurrentUser ? 'message-user' : 'message-other');
             
             // Create message content
@@ -122,7 +122,7 @@ const privateChat = {
     // Send a message to the server
     sendMessage() {
         // Ensure user is authenticated
-        if (!webAuthn || !webAuthn.isAuthenticated) {
+        if (!webAuthn || !webAuthn.currentUserId) {
             this.showSystemMessage('You must be logged in to send private messages.');
             return;
         }
@@ -251,7 +251,7 @@ const privateChat = {
         });
         
         // Only show and start if already authenticated
-        if (webAuthn && webAuthn.isAuthenticated) {
+        if (webAuthn && webAuthn.currentUserId) {
             this.show();
             this.loadMessages();
             this.startPolling();
