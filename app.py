@@ -155,6 +155,21 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute('INSERT INTO registration_settings (registration_enabled) VALUES (1)')
     
+    # Create locations table for live map feature
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS locations (
+        id INTEGER PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES security_keys(user_id)
+    )
+    ''')
+    
+    # Create index for faster location lookups
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_location ON locations (user_id)')
+    
     # Create indices for faster lookups
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_aaguid ON security_keys (aaguid)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_combined_key_hash ON security_keys (combined_key_hash)')
@@ -341,8 +356,6 @@ def find_existing_user_by_credential_id(credential_id):
     """
     Check if a credential_id is already registered
     Returns user_id if found, None otherwise
-    
-    The credential_id is unique per physical key - it's all we need!
     """
     if not credential_id:
         print("DEBUG - No credential_id provided for lookup")
@@ -369,6 +382,43 @@ def find_existing_user_by_credential_id(credential_id):
         return None
     except Exception as e:
         print(f"DEBUG - Error finding existing user: {str(e)}")
+        print(traceback.format_exc())
+        return None
+
+def find_existing_user_by_key(aaguid, public_key_pem):
+    """
+    Check if this physical security key is already registered (by AAGUID + public key)
+    This allows the same physical key to work across multiple devices
+    Returns user_id if found, None otherwise
+    """
+    if not aaguid or not public_key_pem:
+        print("DEBUG - Missing AAGUID or public key for lookup")
+        return None
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Find users with matching AAGUID
+        cursor.execute("SELECT user_id, public_key FROM security_keys WHERE aaguid = ?", (aaguid,))
+        results = cursor.fetchall()
+        conn.close()
+        
+        # Check if any have the same public key
+        for user_id, stored_key_json in results:
+            try:
+                stored_key = json.loads(stored_key_json)
+                if stored_key.get('publicKey') == public_key_pem:
+                    print(f"DEBUG - Found existing user by AAGUID+PublicKey: {user_id}")
+                    return user_id
+            except Exception as e:
+                print(f"DEBUG - Error parsing stored key: {e}")
+                continue
+        
+        print(f"DEBUG - No existing user found with this AAGUID+PublicKey")
+        return None
+    except Exception as e:
+        print(f"DEBUG - Error finding existing user by key: {str(e)}")
         print(traceback.format_exc())
         return None
 
@@ -681,22 +731,66 @@ def webauthn_register_complete():
         existing_user_id = find_existing_user_by_credential_id(normalized_credential_id)
         
         print(f"Register Complete: Normalized credential_id: {normalized_credential_id[:20]}...")
-        print(f"Register Complete: Existing user found: {existing_user_id}")
+        print(f"Register Complete: Existing user by credential_id: {existing_user_id}")
         
-        # If this key is already associated with a user, log in as that user instead
+        # If this exact credential is already registered, log them in
         if existing_user_id:
-            print(f"Register Complete: Security key already registered to user {existing_user_id}")
+            print(f"Register Complete: Credential already registered to user {existing_user_id}")
             
             # Set the session to be authenticated as the existing user
             session['authenticated'] = True
             session['user_id'] = existing_user_id
             session.pop('user_id_for_registration', None)
             
-            # Return a response indicating this is an existing key
+            # Return a response indicating this is an existing credential
             return jsonify({
                 'status': 'existing_key',
-                'message': 'This security key is already registered',
+                'message': 'This credential is already registered',
                 'userId': existing_user_id
+            })
+        
+        # Check if this same physical key is already registered (different device, same key)
+        existing_user_by_key = find_existing_user_by_key(aaguid, public_key_pem)
+        
+        if existing_user_by_key:
+            print(f"Register Complete: Same physical key found for user {existing_user_by_key} - adding new credential")
+            
+            # Add this new credential to the existing user account
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            # Store the credential with the public key
+            public_key = json.dumps({
+                'id': credential_id,
+                'type': data.get('type', 'public-key'),
+                'publicKey': public_key_pem,
+                'attestation': {
+                    'clientDataJSON': data['response']['clientDataJSON'],
+                    'attestationObject': data['response']['attestationObject']
+                }
+            })
+            
+            cursor.execute(
+                """INSERT INTO security_keys 
+                   (credential_id, user_id, public_key, aaguid, attestation_hash, 
+                    combined_key_hash, resident_key, created_at, is_admin) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)""",
+                (normalized_credential_id, existing_user_by_key, public_key, aaguid, 
+                 attestation_hash, combined_key_hash, resident_key)
+            )
+            
+            conn.commit()
+            conn.close()
+            
+            # Log them in as the existing user
+            session['authenticated'] = True
+            session['user_id'] = existing_user_by_key
+            session.pop('user_id_for_registration', None)
+            
+            return jsonify({
+                'status': 'credential_added',
+                'message': 'New device credential added to your existing account',
+                'userId': existing_user_by_key
             })
         
         # Store the credential with the public key
@@ -716,7 +810,7 @@ def webauthn_register_complete():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Check if this is the first user (becomes admin/king)
+        # Check if this is the first user (becomes admin)
         cursor.execute("SELECT COUNT(*) FROM security_keys")
         user_count = cursor.fetchone()[0]
         is_admin = (user_count == 0)  # First user is admin
@@ -1343,6 +1437,153 @@ def toggle_registration():
         return jsonify({"error": str(e)}), 500
 
 # ==========================================
+# Map/Location functionality
+# ==========================================
+
+@app.route('/update_location', methods=['POST'])
+@rate_limit(max_per_minute=60)
+def update_location():
+    """Update user's current location (authenticated users only)"""
+    print("\n=== LOCATION UPDATE REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    user_id = session.get('user_id')
+    if not user_id:
+        print("❌ No user ID in session")
+        return jsonify({"error": "No user ID found"}), 400
+    
+    data = request.get_json()
+    if not data or 'latitude' not in data or 'longitude' not in data:
+        print("❌ Invalid location data")
+        return jsonify({"error": "Latitude and longitude required"}), 400
+    
+    try:
+        latitude = float(data['latitude'])
+        longitude = float(data['longitude'])
+        
+        # Validate coordinate ranges
+        if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            print("❌ Invalid coordinate ranges")
+            return jsonify({"error": "Invalid coordinates"}), 400
+        
+        print(f"Updating location for user {user_id}: ({latitude}, {longitude})")
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if user already has a location entry
+        cursor.execute("SELECT id FROM locations WHERE user_id = ?", (user_id,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing location
+            cursor.execute("""
+                UPDATE locations 
+                SET latitude = ?, longitude = ?, updated_at = datetime('now')
+                WHERE user_id = ?
+            """, (latitude, longitude, user_id))
+        else:
+            # Insert new location
+            cursor.execute("""
+                INSERT INTO locations (user_id, latitude, longitude)
+                VALUES (?, ?, ?)
+            """, (user_id, latitude, longitude))
+        
+        conn.commit()
+        conn.close()
+        
+        print("✅ Location updated successfully")
+        return jsonify({"status": "success"}), 200
+        
+    except ValueError as e:
+        print(f"❌ Invalid coordinate format: {e}")
+        return jsonify({"error": "Invalid coordinate format"}), 400
+    except Exception as e:
+        print(f"❌ Error updating location: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/get_locations', methods=['GET'])
+@rate_limit(max_per_minute=60)
+def get_locations():
+    """Get all active user locations (authenticated users only)"""
+    print("\n=== LOCATION RETRIEVAL REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get locations with usernames, only from last 5 minutes (stale locations removed)
+        cursor.execute("""
+            SELECT l.user_id, l.latitude, l.longitude, l.updated_at, sk.username
+            FROM locations l
+            LEFT JOIN security_keys sk ON l.user_id = sk.user_id
+            WHERE datetime(l.updated_at) > datetime('now', '-5 minutes')
+            ORDER BY l.updated_at DESC
+        """)
+        
+        locations = []
+        for row in cursor.fetchall():
+            user_id, lat, lon, updated_at, username = row
+            locations.append({
+                "userId": user_id,
+                "username": username or f"User-{user_id[:6]}",
+                "latitude": lat,
+                "longitude": lon,
+                "updatedAt": updated_at
+            })
+        
+        conn.close()
+        
+        print(f"Retrieved {len(locations)} active locations")
+        return jsonify({"locations": locations}), 200
+        
+    except Exception as e:
+        print(f"❌ Error retrieving locations: {e}")
+        print(traceback.format_exc())
+        return jsonify({"locations": []}), 200
+
+@app.route('/remove_location', methods=['POST'])
+def remove_location():
+    """Remove user's location from map (go offline)"""
+    print("\n=== LOCATION REMOVAL REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    user_id = session.get('user_id')
+    if not user_id:
+        print("❌ No user ID in session")
+        return jsonify({"error": "No user ID found"}), 400
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("DELETE FROM locations WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Location removed for user {user_id}")
+        return jsonify({"status": "success"}), 200
+        
+    except Exception as e:
+        print(f"❌ Error removing location: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+# ==========================================
 # Static file serving
 # ==========================================
 
@@ -1350,6 +1591,11 @@ def toggle_registration():
 def serve_chat():
     """Serve the chat application HTML"""
     return render_template('index.html')
+
+@app.route('/map')
+def serve_map():
+    """Serve the live map page for location sharing"""
+    return render_template('map.html')
 
 @app.route('/info')
 def serve_info():

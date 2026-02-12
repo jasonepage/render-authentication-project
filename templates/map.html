@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Map - Protest Chat</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map {
+            width: 100%;
+            height: 600px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .map-container {
+            margin-top: 20px;
+        }
+        
+        .map-info {
+            background: var(--bg-secondary);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .map-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .map-controls button {
+            flex: 1;
+            min-width: 150px;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .status-indicator.online {
+            background: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+        
+        .status-indicator.offline {
+            background: #6b7280;
+        }
+        
+        .location-count {
+            color: var(--accent-blue);
+            font-weight: bold;
+        }
+        
+        .update-interval {
+            color: var(--text-secondary);
+            font-size: 0.9em;
+        }
+        
+        /* Custom marker styling */
+        .leaflet-popup-content-wrapper {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .leaflet-popup-tip {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .marker-popup {
+            text-align: center;
+        }
+        
+        .marker-username {
+            font-weight: bold;
+            color: var(--accent-blue);
+            margin-bottom: 5px;
+        }
+        
+        .marker-time {
+            font-size: 0.8em;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📍 Live Location Map</h1>
+            <nav style="margin-top: 10px;">
+                <a href="/chat" class="btn btn-secondary" style="margin-right: 10px;">💬 Chat</a>
+                <a href="/info" class="btn btn-secondary">ℹ️ Info</a>
+            </nav>
+        </header>
+
+        <!-- Authentication Status Section -->
+        <div id="auth-status" class="auth-section">
+            <p>Checking authentication status...</p>
+        </div>
+
+        <!-- Map Section -->
+        <div class="map-container">
+            <div class="map-info">
+                <p>
+                    <span id="sharing-status">
+                        <span class="status-indicator offline"></span>
+                        Location sharing: <strong>Offline</strong>
+                    </span>
+                </p>
+                <p>
+                    Active users on map: <span class="location-count" id="active-count">0</span>
+                </p>
+                <p class="update-interval">Updates every 15 seconds while sharing</p>
+            </div>
+
+            <div class="map-controls" id="map-controls" style="display: none;">
+                <button id="start-sharing" class="btn btn-primary">
+                    📍 Start Sharing Location
+                </button>
+                <button id="stop-sharing" class="btn btn-danger" style="display: none;">
+                    🛑 Stop Sharing
+                </button>
+                <button id="center-map" class="btn btn-secondary">
+                    🎯 Center on Me
+                </button>
+            </div>
+
+            <div id="map"></div>
+        </div>
+
+        <div class="info-section" style="margin-top: 20px;">
+            <h3>How it works</h3>
+            <ul>
+                <li><strong>Authentication Required:</strong> Only registered users with security keys can access the map</li>
+                <li><strong>Real-time Updates:</strong> Locations update every 15 seconds while sharing</li>
+                <li><strong>Go Offline Anytime:</strong> Click "Stop Sharing" or unplug your key to stop broadcasting</li>
+                <li><strong>Stale Locations:</strong> Locations older than 5 minutes are automatically removed</li>
+                <li><strong>Privacy Control:</strong> You control when you're visible on the map</li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="webauthn.js"></script>
+    <script src="map.js"></script>
+</body>
+</html>

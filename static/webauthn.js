@@ -493,6 +493,19 @@ const webAuthn = {
                 
                 // Alert the user that this key was already registered
                 alert('This security key is already registered and has been used to log in to your existing account.');
+            } else if (result.status === 'credential_added') {
+                // Same physical key, new device credential added to existing account
+                this.lastKeyRegistration = {
+                    wasExistingKey: true,
+                    userId: result.userId,
+                    credentialAdded: true
+                };
+                
+                // Update the UI to reflect the authenticated state
+                this.updateUI(true, result.userId);
+                
+                // Alert the user
+                alert('New device credential added! This device can now access your existing account with the same security key.');
             } else {
                 // New registration
                 this.lastKeyRegistration = {
@@ -735,7 +748,7 @@ const webAuthn = {
                     const regButtonText = registrationEnabled ? '🔒 Disable Registration' : '🔓 Enable Registration';
                     adminControls = `
                         <div class="admin-controls">
-                            <p class="admin-badge">👑 ADMIN (King)</p>
+                            <p class="admin-badge">👑 ADMIN</p>
                             <p class="reg-status">Registration is currently <strong>${regStatus}</strong></p>
                             <button onclick="webAuthn.toggleRegistration(); return false;" class="button toggle-reg-button">${regButtonText}</button>
                         </div>

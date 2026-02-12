@@ -442,6 +442,7 @@ button:disabled {
     max-width: 100%;
     word-wrap: break-word;
     background-color: transparent;
+    color: #000000 !important;
 }
 
 .message:hover {
@@ -497,16 +498,27 @@ button:disabled {
 
 .message > div:nth-child(2) {
     margin-left: 52px;
-    color: var(--text-primary) !important;
+    color: #000000 !important;
     font-size: 15px;
     line-height: 1.5;
     word-wrap: break-word;
     white-space: pre-wrap;
+    opacity: 1 !important;
 }
 
-/* Ensure all message text is readable */
-.message div {
-    color: var(--text-primary);
+/* Ensure all message text is readable - always black */
+.message div,
+.message p,
+.message span,
+.message {
+    color: #000000 !important;
+    opacity: 1 !important;
+}
+.message p,
+.message span,
+.message {
+    color: var(--text-primary) !important;
+    opacity: 1 !important;
 }
 
 .message .message-meta {
