@@ -528,7 +528,7 @@ button:disabled {
 .message-system {
     text-align: center;
     background-color: var(--bg-hover);
-    color: var(--text-tertiary);
+    color: #000000 !important;
     font-style: italic;
     padding: 12px 20px;
 }

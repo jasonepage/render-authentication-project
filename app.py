@@ -290,6 +290,7 @@ def extract_attestation_info(attestation_object_base64):
         
         # Extract authenticator data
         auth_data_bytes = attestation_data.get('authData', b'')
+        aaguid_bytes = None
         
         # Extract AAGUID (starts at byte 37, 16 bytes long)
         aaguid = None
@@ -331,6 +332,16 @@ def extract_attestation_info(attestation_object_base64):
         # Extract attestation statement
         statement = attestation_data.get('attStmt', {})
         print(f"DEBUG - Attestation statement keys: {statement.keys()}")
+
+        # Prefer a stable key fingerprint from the attestation certificate, if present
+        key_fingerprint = None
+        if statement.get('x5c'):
+            try:
+                cert_data = statement['x5c'][0]
+                key_fingerprint = hashlib.sha256(cert_data).hexdigest()
+                print(f"DEBUG - Attestation cert hash: {key_fingerprint[:16]}...")
+            except Exception as cert_err:
+                print(f"DEBUG - Attestation cert hash failed: {str(cert_err)}")
         
         # Check if this is a resident key
         flags_byte = auth_data_bytes[32] if len(auth_data_bytes) > 32 else 0
@@ -339,11 +350,9 @@ def extract_attestation_info(attestation_object_base64):
         
         # Create a combined hash that includes both AAGUID and attestation info
         # This gives us a more unique identifier for the physical key
-        combined_data = aaguid_bytes if aaguid_bytes else b''
-        if 'sig' in statement:
-            combined_data += statement['sig']
-        
-        combined_key_hash = hashlib.sha256(combined_data).hexdigest() if combined_data else None
+        combined_key_hash = key_fingerprint
+        if not combined_key_hash and aaguid_bytes and 'sig' in statement:
+            combined_key_hash = hashlib.sha256(aaguid_bytes + statement['sig']).hexdigest()
         print(f"DEBUG - Combined key hash: {combined_key_hash[:16] if combined_key_hash else None}...")
         
         return (aaguid, attestation_hash, combined_key_hash, resident_key)
@@ -385,37 +394,54 @@ def find_existing_user_by_credential_id(credential_id):
         print(traceback.format_exc())
         return None
 
-def find_existing_user_by_key(aaguid, public_key_pem):
+def find_existing_user_by_key(aaguid, public_key_pem, combined_key_hash=None):
     """
-    Check if this physical security key is already registered (by AAGUID + public key)
+    Check if this physical security key is already registered
+    Uses a key fingerprint when available, then falls back to AAGUID-based checks
     This allows the same physical key to work across multiple devices
     Returns user_id if found, None otherwise
     """
-    if not aaguid or not public_key_pem:
-        print("DEBUG - Missing AAGUID or public key for lookup")
+    if not aaguid and not combined_key_hash:
+        print("DEBUG - Missing key identifiers for lookup")
         return None
     
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Find users with matching AAGUID
-        cursor.execute("SELECT user_id, public_key FROM security_keys WHERE aaguid = ?", (aaguid,))
-        results = cursor.fetchall()
+        if combined_key_hash:
+            cursor.execute("SELECT user_id FROM security_keys WHERE combined_key_hash = ?", (combined_key_hash,))
+            result = cursor.fetchone()
+            if result:
+                conn.close()
+                print(f"DEBUG - Found existing user by key fingerprint: {result[0]}")
+                return result[0]
+
+        if aaguid:
+            cursor.execute("SELECT DISTINCT user_id FROM security_keys WHERE aaguid = ?", (aaguid,))
+            user_ids = [row[0] for row in cursor.fetchall()]
+            if len(user_ids) == 1:
+                conn.close()
+                print(f"DEBUG - Found existing user by unique AAGUID: {user_ids[0]}")
+                return user_ids[0]
+
+            if public_key_pem:
+                cursor.execute("SELECT user_id, public_key FROM security_keys WHERE aaguid = ?", (aaguid,))
+                results = cursor.fetchall()
+
+                # Check if any have the same public key
+                for user_id, stored_key_json in results:
+                    try:
+                        stored_key = json.loads(stored_key_json)
+                        if stored_key.get('publicKey') == public_key_pem:
+                            print(f"DEBUG - Found existing user by AAGUID+PublicKey: {user_id}")
+                            return user_id
+                    except Exception as e:
+                        print(f"DEBUG - Error parsing stored key: {e}")
+                        continue
+
         conn.close()
-        
-        # Check if any have the same public key
-        for user_id, stored_key_json in results:
-            try:
-                stored_key = json.loads(stored_key_json)
-                if stored_key.get('publicKey') == public_key_pem:
-                    print(f"DEBUG - Found existing user by AAGUID+PublicKey: {user_id}")
-                    return user_id
-            except Exception as e:
-                print(f"DEBUG - Error parsing stored key: {e}")
-                continue
-        
-        print(f"DEBUG - No existing user found with this AAGUID+PublicKey")
+        print("DEBUG - No existing user found with this key")
         return None
     except Exception as e:
         print(f"DEBUG - Error finding existing user by key: {str(e)}")
@@ -650,7 +676,7 @@ def webauthn_register_options():
                 "userVerification": "discouraged"
             },
             "timeout": 120000,  # 2 minutes
-            "attestation": "none"  # Use "none" to avoid privacy prompts about security key info
+            "attestation": "direct"  # Strongest same-key matching; may trigger privacy prompts
         }
         
         print(f"Register Options: Returning options...")
@@ -750,7 +776,7 @@ def webauthn_register_complete():
             })
         
         # Check if this same physical key is already registered (different device, same key)
-        existing_user_by_key = find_existing_user_by_key(aaguid, public_key_pem)
+        existing_user_by_key = find_existing_user_by_key(aaguid, public_key_pem, combined_key_hash)
         
         if existing_user_by_key:
             print(f"Register Complete: Same physical key found for user {existing_user_by_key} - adding new credential")
