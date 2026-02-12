@@ -297,18 +297,9 @@ const webAuthn = {
             return;
         }
         
-        // Check external key support before proceeding
-        const externalKeySupport = await this.checkExternalKeySupport();
-        if (!externalKeySupport) {
-            alert("This application requires a physical security key (like a YubiKey). " +
-                  "Platform authenticators like Face ID, Touch ID, or Windows Hello are not supported.");
-            return;
-        }
-        
-        this.showModal('Please insert your security key and follow the browser instructions...');
+        // Show modal once before starting registration
+        this.showModal('Please insert your physical security key and touch it when it blinks...');
         this.logEnvironmentInfo();
-        
-        this.showModal('Please insert your security key and follow the browser instructions...');
 
         const isIOS = this.isIOS();
         const isMac = /Mac/.test(navigator.platform);
@@ -1139,46 +1130,8 @@ const webAuthn = {
         return "Debug information printed to console";
     },
     
-    // Check if external security keys are supported
-    checkExternalKeySupport: async function() {
-        try {
-            // Try to create a credential with cross-platform requirement
-            const supported = await navigator.credentials.create({
-                publicKey: {
-                    challenge: new Uint8Array(32),
-                    rp: {
-                        name: "FIDO2 Chat System",
-                        id: window.location.hostname
-                    },
-                    user: {
-                        id: new Uint8Array(16),
-                        name: "test@test.com",
-                        displayName: "Test User"
-                    },
-                    pubKeyCredParams: [{
-                        type: "public-key",
-                        alg: -7
-                    }],
-                    authenticatorSelection: {
-                        authenticatorAttachment: "cross-platform",
-                        requireResidentKey: true,
-                        residentKey: "required",
-                        userVerification: "discouraged"
-                    },
-                    timeout: 1  // Set a very short timeout as we just want to check support
-                }
-            }).then(() => true).catch(error => {
-                // Check if the error indicates no available authenticator
-                return !error.message.includes('available authenticator');
-            });
-            
-            this.log(`External security key support: ${supported}`);
-            return supported;
-        } catch (error) {
-            this.log('Error checking external key support:', error);
-            return false;
-        }
-    },
+    // Platform authenticator blocking is enforced by authenticatorAttachment: "cross-platform"
+    // in the credential creation options. The browser handles this automatically.
 
     // Initialize the application
     init: async function() {
@@ -1198,10 +1151,12 @@ const webAuthn = {
         if (env.isIOS) {
             this.log('iOS-specific optimizations will be applied');
         }
-        
-        // Check authentication status on page load and restore session if authenticated
-        this.checkAuthStatus().then(status => {
-            if (status.authenticated) {
+                        // CRITICAL: cross-platform = ONLY physical security keys
+                        // This blocks Face ID, Touch ID, Windows Hello, etc.
+                        authenticatorAttachment: "cross-platform",
+                        requireResidentKey: true,
+                        residentKey: "required",
+                        userVerification: "discouraged"
                 this.log('User is already authenticated, restoring session');
                 // Start message polling if authenticated
                 this.startMessagePolling();
