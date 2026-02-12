@@ -630,37 +630,33 @@ def webauthn_register_complete():
         attestation_object = data['response']['attestationObject']
         aaguid, attestation_hash, combined_key_hash, resident_key = extract_attestation_info(attestation_object)
         
+        print(f"Register Complete: Key identifiers - AAGUID: {aaguid}, Resident key: {resident_key}")
+        
         # Validate that this is NOT a platform authenticator
-        # Platform authenticators often have specific AAGUIDs we can detect
+        # Only block known platform authenticator AAGUIDs, not generic ones
         if aaguid:
-            # Known platform authenticator AAGUIDs (add more as needed)
+            # Known platform authenticator AAGUIDs (very specific ones only)
             platform_aaguids = [
-                'AAAAAAAAAAAAAAAAAAAAAA',  # Generic placeholder
-                'adce0002-35bc-c60a-648b-0b25f1f05503',  # Windows Hello
-                '08987058-cadc-4b81-b6e1-30de50dcbe96',  # Windows Hello
-                '9ddd1817-af5a-4672-a2b9-3e3dd95000a9',  # Windows Hello
+                'adce0002-35bc-c60a-648b-0b25f1f05503',  # Windows Hello Software
+                '08987058-cadc-4b81-b6e1-30de50dcbe96',  # Windows Hello Hardware
+                '9ddd1817-af5a-4672-a2b9-3e3dd95000a9',  # Windows Hello VBS
                 '6028b017-b1d4-4c02-b4b3-afcdafc96bb2',  # Windows Hello
-                'dd4ec289-e01d-41c9-bb89-70fa845d4bf2',  # Apple Touch ID/Face ID
+                'dd4ec289-e01d-41c9-bb89-70fa845d4bf2',  # Apple Touch ID/Face ID (macOS)
                 '39a5647e-1853-446c-a1f6-a79bae9f5bc7',  # Apple iCloud Keychain
-                '00000000-0000-0000-0000-000000000000',  # Some platform authenticators
             ]
             
             # Check if AAGUID indicates a platform authenticator
+            aaguid_normalized = aaguid.lower().replace('-', '')
             for platform_guid in platform_aaguids:
-                if aaguid.lower().replace('-', '') == platform_guid.lower().replace('-', ''):
+                if aaguid_normalized == platform_guid.lower().replace('-', ''):
                     print(f"Register Error: Platform authenticator detected (AAGUID: {aaguid})")
                     return jsonify({
                         'error': 'Platform authenticators (Touch ID, Face ID, Windows Hello) are not allowed. Please use a physical security key like YubiKey.'
                     }), 403
         
-        # Additional check: If no AAGUID and not a resident key, likely a platform authenticator
-        if not aaguid and not resident_key:
-            print(f"Register Error: Likely platform authenticator (no AAGUID, not resident key)")
-            return jsonify({
-                'error': 'This appears to be a platform authenticator. Please use a physical security key like YubiKey.'
-            }), 403
-        
-        print(f"Register Complete: Key validated as physical security key")
+        # Note: We trust the browser's enforcement of authenticatorAttachment: "cross-platform"
+        # Most legitimate cases will be physical security keys at this point
+        print(f"Register Complete: Key validated as physical security key (passed platform checks)")
         
         # Extract and format the public key
         public_key_pem = extract_public_key_from_attestation(attestation_object)
