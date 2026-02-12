@@ -282,6 +282,75 @@ button:disabled {
     margin-top: 16px;
 }
 
+/* Admin controls styling */
+.admin-controls {
+    background: linear-gradient(135deg, #1e3a52 0%, #192734 100%);
+    border: 2px solid #ffd700;
+    border-radius: 12px;
+    padding: 16px;
+    margin: 16px 0;
+    text-align: center;
+}
+
+.admin-badge {
+    font-size: 18px;
+    font-weight: 800;
+    color: #ffd700;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.reg-status {
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin: 8px 0;
+}
+
+.reg-status strong {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.toggle-reg-button {
+    margin-top: 12px;
+    background-color: #ffd700;
+    color: var(--bg-primary);
+    font-weight: 700;
+    border: none;
+}
+
+.toggle-reg-button:hover {
+    background-color: #ffed4e;
+    color: var(--bg-primary);
+}
+
+/* Username notification styling */
+.username-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: var(--accent-green);
+    color: white;
+    padding: 16px 24px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    font-weight: 700;
+    animation: slideIn 0.3s ease-out;
+    z-index: 9999;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
 .info-button {
     background-color: var(--accent-purple);
     border-color: var(--accent-purple);

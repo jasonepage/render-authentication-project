@@ -725,6 +725,23 @@ const webAuthn = {
             .then(response => response.json())
             .then(data => {
                 const username = data.username || 'Anonymous';
+                const isAdmin = data.isAdmin || false;
+                const registrationEnabled = data.registrationEnabled !== undefined ? data.registrationEnabled : true;
+                
+                // Build admin controls if user is admin
+                let adminControls = '';
+                if (isAdmin) {
+                    const regStatus = registrationEnabled ? 'enabled' : 'disabled';
+                    const regButtonText = registrationEnabled ? '🔒 Disable Registration' : '🔓 Enable Registration';
+                    adminControls = `
+                        <div class="admin-controls">
+                            <p class="admin-badge">👑 ADMIN (King)</p>
+                            <p class="reg-status">Registration is currently <strong>${regStatus}</strong></p>
+                            <button onclick="webAuthn.toggleRegistration(); return false;" class="button toggle-reg-button">${regButtonText}</button>
+                        </div>
+                    `;
+                }
+                
                 authSection.innerHTML = `
                     <p>You are authenticated!</p>
                     <div class="user-info">
@@ -732,6 +749,7 @@ const webAuthn = {
                             <span class="username-display">Username: <span class="username-value">${username}</span></span><br>
                             <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
                         </p>
+                        ${adminControls}
                         <div class="button-group">
                             <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
                             <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
@@ -771,12 +789,12 @@ const webAuthn = {
                 }
             }));
         } else {
-            // Display unauthenticated state with registration and login buttons
+            // Display unauthenticated state with registration button only
+            // Note: Login is not needed - registering with an existing key will log you in automatically
             authSection.innerHTML = `
                 <p>You are not authenticated.</p>
                 <div class="auth-buttons">
-                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register Security Key</button>
-                    <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login</button>
+                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register/Login with Security Key</button>
                     <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
                 </div>
             `;
@@ -846,6 +864,59 @@ const webAuthn = {
             if (cycleButton) {
                 cycleButton.disabled = false;
                 cycleButton.textContent = '🎲 New Random Username';
+            }
+        });
+    },
+
+    // Toggle registration (admin only)
+    toggleRegistration: function() {
+        this.log('Toggling registration...');
+        
+        const toggleButton = document.querySelector('.toggle-reg-button');
+        if (toggleButton) {
+            toggleButton.disabled = true;
+            toggleButton.textContent = '⏳ Updating...';
+        }
+        
+        fetch(this.getEndpointPath('toggle_registration'), {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`Failed to toggle registration (${response.status}): ${text}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log('Registration toggled successfully:', result);
+            
+            // Show notification
+            const notification = document.createElement('div');
+            notification.className = 'username-notification';
+            notification.textContent = result.message;
+            document.body.appendChild(notification);
+            
+            // Remove notification after 3 seconds
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+            
+            // Refresh auth status to update UI
+            this.checkAuthStatus();
+        })
+        .catch(error => {
+            this.logError('Error toggling registration:', error);
+            alert(`Failed to toggle registration: ${error.message}`);
+        })
+        .finally(() => {
+            if (toggleButton) {
+                toggleButton.disabled = false;
             }
         });
     },

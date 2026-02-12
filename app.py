@@ -140,6 +140,21 @@ def init_db():
     )
     ''')
     
+    # Create registration_settings table for admin control
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS registration_settings (
+        id INTEGER PRIMARY KEY,
+        registration_enabled BOOLEAN DEFAULT 1,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT
+    )
+    ''')
+    
+    # Initialize registration settings if not exists
+    cursor.execute('SELECT COUNT(*) FROM registration_settings')
+    if cursor.fetchone()[0] == 0:
+        cursor.execute('INSERT INTO registration_settings (registration_enabled) VALUES (1)')
+    
     # Create indices for faster lookups
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_aaguid ON security_keys (aaguid)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_combined_key_hash ON security_keys (combined_key_hash)')
@@ -169,11 +184,21 @@ def get_total_users():
         return 0
 
 def can_register():
-    """Check if registration is currently allowed (max 25 users)"""
-    total_users = get_total_users()
-    if total_users < 25:
+    """Check if registration is currently allowed (controlled by admin)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT registration_enabled FROM registration_settings WHERE id = 1")
+        result = c.fetchone()
+        conn.close()
+        
+        if result and result[0]:
+            return True, None
+        return False, "Registration is currently disabled by admin"
+    except Exception as e:
+        print(f"Error checking registration status: {e}")
+        # Default to allowing registration if there's an error
         return True, None
-    return False, "Registration closed - Maximum 25 users reached"
 
 def rate_limit(max_per_minute=60):
     """Rate limiting decorator"""
@@ -708,15 +733,23 @@ def webauthn_register_complete():
         if cursor.fetchone():
             print(f"Register Complete: Credential ID already exists, skipping insertion")
         else:
+            # Check if this is the first user (becomes admin/king)
+            cursor.execute("SELECT COUNT(*) FROM security_keys")
+            user_count = cursor.fetchone()[0]
+            is_admin = (user_count == 0)  # First user is admin
+            
+            if is_admin:
+                print(f"Register Complete: First user registered - granting admin privileges")
+            
             # Store with all the key identifiers
             print(f"Register Complete: Storing credential with normalized ID: {normalized_credential_id[:20]}...")
             cursor.execute(
                 """INSERT INTO security_keys 
                    (credential_id, user_id, public_key, aaguid, attestation_hash, 
-                    combined_key_hash, resident_key, created_at) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                    combined_key_hash, resident_key, created_at, is_admin) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
                 (normalized_credential_id, user_id, public_key, aaguid, 
-                 attestation_hash, combined_key_hash, resident_key)
+                 attestation_hash, combined_key_hash, resident_key, is_admin)
             )
         
         conn.commit()
@@ -963,28 +996,54 @@ def webauthn_auth_status():
     is_authenticated = session.get('authenticated', False)
     user_id = session.get('user_id', None) if is_authenticated else None
     username = None
+    is_admin = False
+    registration_enabled = True
     
     if is_authenticated and user_id:
         print(f"✅ User is authenticated: {user_id}")
         try:
-            # Get username from database
+            # Get username and admin status from database
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            cursor.execute("SELECT username FROM security_keys WHERE user_id = ?", (user_id,))
+            cursor.execute("SELECT username, is_admin FROM security_keys WHERE user_id = ?", (user_id,))
             result = cursor.fetchone()
-            conn.close()
             
-            username = result[0] if result and result[0] else f"User-{user_id[:6]}"
+            if result:
+                username = result[0] if result[0] else f"User-{user_id[:6]}"
+                is_admin = bool(result[1])
+            else:
+                username = f"User-{user_id[:6]}"
+            
+            # Get registration status
+            cursor.execute("SELECT registration_enabled FROM registration_settings WHERE id = 1")
+            reg_result = cursor.fetchone()
+            if reg_result:
+                registration_enabled = bool(reg_result[0])
+            
+            conn.close()
         except Exception as e:
-            print(f"Error fetching username: {e}")
+            print(f"Error fetching user data: {e}")
             username = f"User-{user_id[:6]}"
     else:
         print("❌ User is not authenticated")
+        # Still get registration status for unauthenticated users
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT registration_enabled FROM registration_settings WHERE id = 1")
+            reg_result = cursor.fetchone()
+            if reg_result:
+                registration_enabled = bool(reg_result[0])
+            conn.close()
+        except Exception as e:
+            print(f"Error fetching registration status: {e}")
     
     return jsonify({
         "authenticated": is_authenticated,
         "userId": user_id,
-        "username": username
+        "username": username,
+        "isAdmin": is_admin,
+        "registrationEnabled": registration_enabled
     })
 
 # ==========================================
@@ -1240,6 +1299,63 @@ def cycle_username():
         
     except Exception as e:
         print(f"❌ Error updating username: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/toggle_registration', methods=['POST'])
+def toggle_registration():
+    """Toggle registration on/off (admin only)"""
+    print("\n=== REGISTRATION TOGGLE REQUEST ===")
+    
+    # Check authentication
+    if not session.get('authenticated'):
+        print("❌ User not authenticated")
+        return jsonify({"error": "Authentication required"}), 401
+    
+    user_id = session.get('user_id')
+    if not user_id:
+        print("❌ No user ID in session")
+        return jsonify({"error": "No user ID found"}), 400
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Check if user is admin
+        cursor.execute("SELECT is_admin FROM security_keys WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        
+        if not result or not result[0]:
+            print(f"❌ User {user_id} is not an admin")
+            conn.close()
+            return jsonify({"error": "Admin privileges required"}), 403
+        
+        # Get current registration status
+        cursor.execute("SELECT registration_enabled FROM registration_settings WHERE id = 1")
+        current_status = cursor.fetchone()[0]
+        
+        # Toggle the status
+        new_status = not current_status
+        cursor.execute("""
+            UPDATE registration_settings 
+            SET registration_enabled = ?, updated_at = datetime('now'), updated_by = ?
+            WHERE id = 1
+        """, (new_status, user_id))
+        
+        conn.commit()
+        conn.close()
+        
+        status_text = "enabled" if new_status else "disabled"
+        print(f"✅ Registration {status_text} by admin {user_id}")
+        
+        return jsonify({
+            "status": "success",
+            "registrationEnabled": new_status,
+            "message": f"Registration {status_text}"
+        })
+        
+    except Exception as e:
+        print(f"❌ Error toggling registration: {e}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
 
