@@ -89,42 +89,77 @@
     <script>
         // Initialize admin page
         document.addEventListener('DOMContentLoaded', function() {
-            webAuthn.checkAuthStatus().then(status => {
-                if (status.authenticated) {
-                    document.getElementById('login-section').style.display = 'none';
-                    document.getElementById('user-info-section').style.display = 'block';
+            // First, check if this is the first user
+            fetch('/check_registration_status')
+                .then(response => response.json())
+                .then(regStatus => {
+                    const isFirstUser = regStatus.totalUsers === 0;
                     
-                    // Show register key section only to admins
-                    if (status.isAdmin) {
-                        document.getElementById('register-key-section').style.display = 'block';
-                        document.getElementById('admin-controls-section').style.display = 'block';
-                    } else {
-                        document.getElementById('register-key-section').style.display = 'none';
-                        document.getElementById('admin-controls-section').style.display = 'none';
-                    }
-                    
-                    // Display user details
-                    const userDetailsDiv = document.getElementById('user-details');
-                    const displayUserId = status.userId ? status.userId.substring(0, 8) + '...' : 'Unknown';
-                    const username = status.username || 'Anonymous';
-                    
-                    userDetailsDiv.innerHTML = `
-                        <p><strong>Username:</strong> <span class="username-value">${username}</span></p>
-                        <p><strong>User ID:</strong> <span class="user-id-value" title="${status.userId || ''}">${displayUserId}</span></p>
-                        ${status.isAdmin ? '<p><strong>Role:</strong> 👑 Administrator</p>' : ''}
-                    `;
-                    
-                    // Update registration status if admin
-                    if (status.isAdmin) {
-                        updateRegistrationStatus();
-                    }
-                } else {
-                    document.getElementById('login-section').style.display = 'block';
-                    document.getElementById('user-info-section').style.display = 'none';
-                    document.getElementById('register-key-section').style.display = 'none';
-                    document.getElementById('admin-controls-section').style.display = 'none';
-                }
-            });
+                    webAuthn.checkAuthStatus().then(status => {
+                        if (status.authenticated) {
+                            document.getElementById('login-section').style.display = 'none';
+                            document.getElementById('user-info-section').style.display = 'block';
+                            
+                            // Show register key section to admins
+                            if (status.isAdmin) {
+                                document.getElementById('register-key-section').style.display = 'block';
+                                document.getElementById('admin-controls-section').style.display = 'block';
+                            } else {
+                                document.getElementById('register-key-section').style.display = 'none';
+                                document.getElementById('admin-controls-section').style.display = 'none';
+                            }
+                            
+                            // Display user details
+                            const userDetailsDiv = document.getElementById('user-details');
+                            const displayUserId = status.userId ? status.userId.substring(0, 8) + '...' : 'Unknown';
+                            const username = status.username || 'Anonymous';
+                            
+                            userDetailsDiv.innerHTML = `
+                                <p><strong>Username:</strong> <span class="username-value">${username}</span></p>
+                                <p><strong>User ID:</strong> <span class="user-id-value" title="${status.userId || ''}">${displayUserId}</span></p>
+                                ${status.isAdmin ? '<p><strong>Role:</strong> 👑 Administrator</p>' : ''}
+                            `;
+                            
+                            // Update registration status if admin
+                            if (status.isAdmin) {
+                                updateRegistrationStatus();
+                            }
+                        } else {
+                            document.getElementById('login-section').style.display = 'block';
+                            document.getElementById('user-info-section').style.display = 'none';
+                            document.getElementById('admin-controls-section').style.display = 'none';
+                            
+                            // Show register section only if this is the first user
+                            if (isFirstUser) {
+                                document.getElementById('register-key-section').style.display = 'block';
+                            } else {
+                                document.getElementById('register-key-section').style.display = 'none';
+                            }
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error checking registration status:', error);
+                    webAuthn.checkAuthStatus().then(status => {
+                        if (status.authenticated) {
+                            document.getElementById('login-section').style.display = 'none';
+                            document.getElementById('user-info-section').style.display = 'block';
+                            
+                            if (status.isAdmin) {
+                                document.getElementById('register-key-section').style.display = 'block';
+                                document.getElementById('admin-controls-section').style.display = 'block';
+                            } else {
+                                document.getElementById('register-key-section').style.display = 'none';
+                                document.getElementById('admin-controls-section').style.display = 'none';
+                            }
+                        } else {
+                            document.getElementById('login-section').style.display = 'block';
+                            document.getElementById('user-info-section').style.display = 'none';
+                            document.getElementById('register-key-section').style.display = 'none';
+                            document.getElementById('admin-controls-section').style.display = 'none';
+                        }
+                    });
+                });
         });
 
         function updateRegistrationStatus() {
