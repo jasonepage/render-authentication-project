@@ -32,8 +32,8 @@
 
         <!-- Admin Section -->
         <div class="admin-section">
-            <!-- Register New Key Section -->
-            <div class="admin-card">
+            <!-- Register New Key Section (admin only) -->
+            <div id="register-key-section" class="admin-card" style="display: none;">
                 <h2>Register New Key</h2>
                 <p>Register a new security key to your account. You can register multiple keys and use any of them to log in.</p>
                 <button onclick="webAuthn.registerKey(); return false;" class="button register-button">🔐 Register New Key</button>
@@ -93,7 +93,15 @@
                 if (status.authenticated) {
                     document.getElementById('login-section').style.display = 'none';
                     document.getElementById('user-info-section').style.display = 'block';
-                    document.getElementById('admin-controls-section').style.display = status.isAdmin ? 'block' : 'none';
+                    
+                    // Show register key section only to admins
+                    if (status.isAdmin) {
+                        document.getElementById('register-key-section').style.display = 'block';
+                        document.getElementById('admin-controls-section').style.display = 'block';
+                    } else {
+                        document.getElementById('register-key-section').style.display = 'none';
+                        document.getElementById('admin-controls-section').style.display = 'none';
+                    }
                     
                     // Display user details
                     const userDetailsDiv = document.getElementById('user-details');
@@ -113,6 +121,7 @@
                 } else {
                     document.getElementById('login-section').style.display = 'block';
                     document.getElementById('user-info-section').style.display = 'none';
+                    document.getElementById('register-key-section').style.display = 'none';
                     document.getElementById('admin-controls-section').style.display = 'none';
                 }
             });
