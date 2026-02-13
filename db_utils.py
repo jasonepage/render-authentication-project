@@ -99,6 +99,7 @@ def init_db():
         """
     )
 
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_location ON locations (user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_aaguid ON security_keys (aaguid)")
     cursor.execute(

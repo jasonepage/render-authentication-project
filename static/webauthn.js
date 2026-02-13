@@ -274,6 +274,169 @@ const webAuthn = {
             });
     },
 
+    performRegistration: function(options, isMac) {
+        this.log(`Received registration options:`, options);
+
+        this.log("Challenge details:", {
+            value: options.challenge,
+            type: typeof options.challenge,
+            length: options.challenge?.length || 0
+        });
+
+        this.log("AuthenticatorSelection settings:", options.authenticatorSelection);
+
+        try {
+            if (typeof options.challenge !== 'string') {
+                this.logWarn(`Challenge is not a string! Type: ${typeof options.challenge}`);
+                options.challenge = String(options.challenge);
+            }
+
+            this.log(`Converting challenge: ${options.challenge}`);
+            options.challenge = this.base64urlToArrayBuffer(options.challenge);
+            this.log(`Challenge converted successfully`);
+        } catch (e) {
+            this.logError(`Failed to convert challenge: ${e.message}`, e);
+            throw new Error(`Challenge conversion failed: ${e.message}`);
+        }
+
+        if (options.user && options.user.id) {
+            try {
+                if (typeof options.user.id !== 'string') {
+                    this.logWarn(`User ID is not a string! Type: ${typeof options.user.id}`);
+                    options.user.id = String(options.user.id);
+                }
+
+                this.log('Converting user ID:', options.user.id);
+                options.user.id = this.base64urlToArrayBuffer(options.user.id);
+                this.log('User ID converted successfully');
+            } catch (e) {
+                this.logError(`Failed to convert user.id: ${e.message}`, e);
+                throw new Error(`User ID conversion failed: ${e.message}`);
+            }
+        }
+
+        if (options.excludeCredentials) {
+            for (let i = 0; i < options.excludeCredentials.length; i++) {
+                options.excludeCredentials[i].id = this.base64urlToArrayBuffer(options.excludeCredentials[i].id);
+            }
+        }
+
+        if (isMac) {
+            this.log('Applying Mac-specific adjustments');
+            options.authenticatorSelection = options.authenticatorSelection || {};
+            if (options.authenticatorSelection.requireResidentKey) {
+                options.authenticatorSelection.residentKey = "required";
+            }
+
+            this.log('Adjusted options for Mac compatibility', options.authenticatorSelection);
+        }
+
+        this.log('Converted all fields, final options:', options);
+
+        return navigator.credentials.create({
+            publicKey: options
+        }).catch(err => {
+            this.logError('Credential creation failed', err);
+            console.error('ERROR DETAILS:', {
+                name: err.name,
+                message: err.message,
+                code: err.code,
+                stack: err.stack
+            });
+            throw err;
+        })
+        .then(credential => {
+            this.log('Credential created successfully, preparing data for server');
+            this.log("Raw credential object:", {
+                id: credential.id,
+                type: credential.type,
+                rawId: new Uint8Array(credential.rawId).slice(0, 10),
+                responseKeys: Object.keys(credential.response)
+            });
+
+            try {
+                const credentialId = this.arrayBufferToBase64url(credential.rawId);
+                const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
+                const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
+
+                this.log("Encoded credential data:", {
+                    credentialId: credentialId.substring(0, 20) + "...",
+                    clientDataJSONPreview: clientDataJSON.substring(0, 20) + "...",
+                    attestationObjectPreview: attestationObject.substring(0, 20) + "..."
+                });
+
+                const registerCompleteUrl = this.getEndpointPath('register_complete');
+                this.log(`Using register complete URL: ${registerCompleteUrl}`);
+
+                return fetch(registerCompleteUrl, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        id: credentialId,
+                        rawId: credentialId,
+                        type: credential.type,
+                        response: {
+                            clientDataJSON: clientDataJSON,
+                            attestationObject: attestationObject
+                        }
+                    })
+                });
+            } catch (error) {
+                this.logError("Failed to process credential for submission", error);
+                throw error;
+            }
+        })
+        .then(response => {
+            this.log(`Response status: ${response.status}`);
+            if (!response.ok) {
+                return response.text().then(text => {
+                    this.log(`Error response: ${text}`);
+                    throw new Error(`Failed to complete registration (${response.status}): ${text}`);
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            this.log(`Registration complete, result:`, result);
+            this.hideModal();
+
+            if (result.status === 'existing_key') {
+                this.lastKeyRegistration = {
+                    wasExistingKey: true,
+                    userId: result.userId
+                };
+
+                this.updateUI(true, result.userId);
+                alert('This security key is already registered and has been used to log in to your existing account.');
+            } else if (result.status === 'credential_added') {
+                this.lastKeyRegistration = {
+                    wasExistingKey: true,
+                    userId: result.userId,
+                    credentialAdded: true
+                };
+
+                this.updateUI(true, result.userId);
+                alert('New device credential added! This device can now access your existing account with the same security key.');
+            } else {
+                this.lastKeyRegistration = {
+                    wasExistingKey: false,
+                    userId: result.userId
+                };
+
+                this.updateUI(true, result.userId);
+                alert('Security key registered successfully!');
+            }
+        })
+        .catch(error => {
+            this.log(`Registration error: ${error.message}`);
+            this.hideModal();
+            alert(`Registration failed: ${error.message}`);
+        });
+    },
+
     // Register a new security key
     registerKey: async function() {
         this.log('Starting registration process');
@@ -338,196 +501,11 @@ const webAuthn = {
                 return response.json();
             }
         )
-        .then(options => {
-            this.log(`Received registration options:`, options);
-            
-            // Debug the challenge format specifically
-            this.log("Challenge details:", {
-                value: options.challenge,
-                type: typeof options.challenge,
-                length: options.challenge?.length || 0
-            });
-            
-            // Debug the authenticatorSelection settings
-            this.log("AuthenticatorSelection settings:", options.authenticatorSelection);
-            
-            // Enhanced error handling and logging for challenge conversion
-            try {
-                // Make sure challenge is a string before conversion
-                if (typeof options.challenge !== 'string') {
-                    this.logWarn(`Challenge is not a string! Type: ${typeof options.challenge}`);
-                    options.challenge = String(options.challenge);
-                }
-                
-                this.log(`Converting challenge: ${options.challenge}`);
-                options.challenge = this.base64urlToArrayBuffer(options.challenge);
-                this.log(`Challenge converted successfully`);
-            } catch (e) {
-                this.logError(`Failed to convert challenge: ${e.message}`, e);
-                throw new Error(`Challenge conversion failed: ${e.message}`);
-            }
-            
-            // Enhanced handling for user.id
-            if (options.user && options.user.id) {
-                try {
-                    if (typeof options.user.id !== 'string') {
-                        this.logWarn(`User ID is not a string! Type: ${typeof options.user.id}`);
-                        options.user.id = String(options.user.id);
-                    }
-                    
-                    this.log('Converting user ID:', options.user.id);
-                    options.user.id = this.base64urlToArrayBuffer(options.user.id);
-                    this.log('User ID converted successfully');
-                } catch (e) {
-                    this.logError(`Failed to convert user.id: ${e.message}`, e);
-                    throw new Error(`User ID conversion failed: ${e.message}`);
-                }
-            }
-            
-            if (options.excludeCredentials) {
-                for (let i = 0; i < options.excludeCredentials.length; i++) {
-                    options.excludeCredentials[i].id = this.base64urlToArrayBuffer(options.excludeCredentials[i].id);
-                }
-            }
-            
-            // Device-specific adjustments
-            if (isMac) {
-                this.log('Applying Mac-specific adjustments');
-                // Accept Mac's defaults, but ensure residentKey is set correctly
-                options.authenticatorSelection = options.authenticatorSelection || {};
-                
-                // Keep requireResidentKey true, but ensure residentKey is properly set
-                if (options.authenticatorSelection.requireResidentKey) {
-                    options.authenticatorSelection.residentKey = "required";
-                }
-                
-                this.log('Adjusted options for Mac compatibility', options.authenticatorSelection);
-            }
-            
-            this.log('Converted all fields, final options:', options);
-            
-            // Step 2: Create credentials using WebAuthn API
-            this.log("Calling navigator.credentials.create");
-            return navigator.credentials.create({
-                publicKey: options
-            }).catch(err => {
-                this.logError('Credential creation failed', err);
-                console.error('ERROR DETAILS:', {
-                    name: err.name,
-                    message: err.message,
-                    code: err.code,
-                    stack: err.stack
-                });
-                throw err;
-            });
-        })
-        .then(credential => {
-            this.log('Credential created successfully, preparing data for server');
-            this.log("Raw credential object:", {
-                id: credential.id,
-                type: credential.type,
-                rawId: new Uint8Array(credential.rawId).slice(0, 10), // Preview of the rawId
-                responseKeys: Object.keys(credential.response)
-            });
-            
-            // Prepare the credential data to send to server
-            try {
-                const credentialId = this.arrayBufferToBase64url(credential.rawId);
-                const clientDataJSON = this.arrayBufferToBase64url(credential.response.clientDataJSON);
-                const attestationObject = this.arrayBufferToBase64url(credential.response.attestationObject);
-                
-                this.log("Encoded credential data:", {
-                    credentialId: credentialId.substring(0, 20) + "...",
-                    clientDataJSONPreview: clientDataJSON.substring(0, 20) + "...",
-                    attestationObjectPreview: attestationObject.substring(0, 20) + "..."
-                });
-                
-                const registerCompleteUrl = this.getEndpointPath('register_complete');
-                this.log(`Using register complete URL: ${registerCompleteUrl}`);
-                
-                // Step 3: Send credential data to server
-                return fetch(registerCompleteUrl, {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        id: credentialId,
-                        rawId: credentialId,
-                        type: credential.type,
-                        response: {
-                            clientDataJSON: clientDataJSON,
-                            attestationObject: attestationObject
-                        }
-                    })
-                });
-            } catch (error) {
-                this.logError("Failed to process credential for submission", error);
-                throw error;
-            }
-        })
-        .then(response => {
-            this.log(`Response status: ${response.status}`);
-            if (!response.ok) {
-                return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
-                    throw new Error(`Failed to complete registration (${response.status}): ${text}`);
-                });
-            }
-            return response.json();
-        })
-        .then(result => {
-            this.log(`Registration complete, result:`, result);
-            this.hideModal();
-            
-            // Check if this was an existing key (already registered)
-            if (result.status === 'existing_key') {
-                this.lastKeyRegistration = {
-                    wasExistingKey: true,
-                    userId: result.userId
-                };
-                
-                // Update the UI to reflect the authenticated state with the existing user
-                this.updateUI(true, result.userId);
-                
-                // Alert the user that this key was already registered
-                alert('This security key is already registered and has been used to log in to your existing account.');
-            } else if (result.status === 'credential_added') {
-                // Same physical key, new device credential added to existing account
-                this.lastKeyRegistration = {
-                    wasExistingKey: true,
-                    userId: result.userId,
-                    credentialAdded: true
-                };
-                
-                // Update the UI to reflect the authenticated state
-                this.updateUI(true, result.userId);
-                
-                // Alert the user
-                alert('New device credential added! This device can now access your existing account with the same security key.');
-            } else {
-                // New registration
-                this.lastKeyRegistration = {
-                    wasExistingKey: false,
-                    userId: result.userId
-                };
-                
-                // Update the UI to reflect the authenticated state
-                this.updateUI(true, result.userId);
-                
-                // Alert the user
-                alert('Security key registered successfully!');
-            }
-        })
-        .catch(error => {
-            this.log(`Registration error: ${error.message}`);
-            this.hideModal();
-            alert(`Registration failed: ${error.message}`);
-        });
+        .then(options => this.performRegistration(options, isMac));
         
         return false; // Prevent form submission
     },
+
 
     // Login with a registered security key
     loginWithKey: async function() {
@@ -763,10 +741,12 @@ const webAuthn = {
                             <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
                         </p>
                         ${adminControls}
+                        <div class="auth-buttons">
+                            <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                        </div>
                         <div class="button-group">
                             <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
                             <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
-                            <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
                         </div>
                     </div>
                 `;
@@ -780,10 +760,12 @@ const webAuthn = {
                         <p class="user-info-display">
                             <span class="user-id-display">ID: <span class="user-id-value" title="${userId || ''}">${displayUserId}</span></span>
                         </p>
+                        <div class="auth-buttons">
+                            <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                        </div>
                         <div class="button-group">
                             <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 New Random Username</button>
                             <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
-                            <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
                         </div>
                     </div>
                 `;
@@ -807,7 +789,8 @@ const webAuthn = {
             authSection.innerHTML = `
                 <p>You are not authenticated.</p>
                 <div class="auth-buttons">
-                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register/Login with Security Key</button>
+                    <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login with Security Key</button>
+                    <button onclick="webAuthn.registerKey(); return false;" class="button register-button">Register New Key</button>
                     <button onclick="window.location.href='/info'" class="button info-button">ℹ️ Info</button>
                 </div>
             `;

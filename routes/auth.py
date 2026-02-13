@@ -70,7 +70,7 @@ def webauthn_register_options():
                 "userVerification": "discouraged",
             },
             "timeout": 120000,
-            "attestation": "direct",
+            "attestation": "none",
         }
 
         return jsonify(options)
@@ -445,3 +445,5 @@ def check_registration_status():
             "message": error_msg if not can_reg else f"{total_users}/25 users registered",
         }
     )
+
+
