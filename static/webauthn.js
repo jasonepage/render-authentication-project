@@ -793,21 +793,10 @@ const webAuthn = {
                 }
             }));
         } else {
-            // Display unauthenticated state with login button only (registration is on /admin)
-            // Determine if we're on the chat page or admin page
-            const isChatPage = window.location.pathname === '/chat';
-            const isAdminPage = window.location.pathname === '/admin';
-            
+            // Display unauthenticated state with login button only
+            // Registration is handled on /admin page
             let authButtons = '<button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login with Security Key</button>';
-            
-            // On /admin page, also show hints about registration
-            if (isAdminPage) {
-                authButtons += '<button onclick="window.location.href=\'/info\'" class="button info-button">ℹ️ Info</button>';
-            } else if (isChatPage) {
-                // On /chat, remind where to register
-                authButtons += '<button onclick="window.location.href=\'/admin\'" class="button register-button">Register New Key</button>';
-                authButtons += '<button onclick="window.location.href=\'/info\'" class="button info-button">ℹ️ Info</button>';
-            }
+            authButtons += '<button onclick="window.location.href=\'/info\'" class="button info-button">ℹ️ Info</button>';
             
             authSection.innerHTML = `
                 <p>You are not authenticated.</p>
