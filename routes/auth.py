@@ -184,38 +184,54 @@ def webauthn_register_complete():
                     }
                 )
 
-                cursor.execute(
-                    """
-                    INSERT INTO security_keys
-                        (credential_id, user_id, public_key, aaguid, attestation_hash,
-                         combined_key_hash, resident_key, created_at, is_admin)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
-                    """,
-                    (
-                        normalized_credential_id,
-                        existing_user_by_key,
-                        public_key,
-                        aaguid,
-                        attestation_hash,
-                        combined_key_hash,
-                        resident_key,
-                    ),
-                )
+                try:
+                    cursor.execute(
+                        """
+                        INSERT INTO security_keys
+                            (credential_id, user_id, public_key, aaguid, attestation_hash,
+                             combined_key_hash, resident_key, created_at, is_admin)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
+                        """,
+                        (
+                            normalized_credential_id,
+                            existing_user_by_key,
+                            public_key,
+                            aaguid,
+                            attestation_hash,
+                            combined_key_hash,
+                            resident_key,
+                        ),
+                    )
 
-                conn.commit()
-                conn.close()
+                    conn.commit()
+                    conn.close()
 
-                session["authenticated"] = True
-                session["user_id"] = existing_user_by_key
-                session.pop("user_id_for_registration", None)
+                    session["authenticated"] = True
+                    session["user_id"] = existing_user_by_key
+                    session.pop("user_id_for_registration", None)
 
-                return jsonify(
-                    {
-                        "status": "credential_added",
-                        "message": "New device credential added to your existing account",
-                        "userId": existing_user_by_key,
-                    }
-                )
+                    return jsonify(
+                        {
+                            "status": "credential_added",
+                            "message": "New device credential added to your existing account",
+                            "userId": existing_user_by_key,
+                        }
+                    )
+                except Exception as sqlite_error:
+                    conn.close()
+                    if "UNIQUE constraint failed" in str(sqlite_error) and "public_key" in str(sqlite_error):
+                        return jsonify(
+                            {
+                                "error": "This security key is already registered. Each physical security key can only be registered once."
+                            }
+                        ), 409
+                    raise
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM security_keys")
+        user_count = cursor.fetchone()[0]
+        is_admin = user_count == 0
 
         public_key = json.dumps(
             {
@@ -229,39 +245,43 @@ def webauthn_register_complete():
             }
         )
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM security_keys")
-        user_count = cursor.fetchone()[0]
-        is_admin = user_count == 0
+        try:
+            cursor.execute(
+                """
+                INSERT INTO security_keys
+                    (credential_id, user_id, public_key, aaguid, attestation_hash,
+                     combined_key_hash, resident_key, created_at, is_admin)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+                """,
+                (
+                    normalized_credential_id,
+                    user_id,
+                    public_key,
+                    aaguid,
+                    attestation_hash,
+                    combined_key_hash,
+                    resident_key,
+                    is_admin,
+                ),
+            )
 
-        cursor.execute(
-            """
-            INSERT INTO security_keys
-                (credential_id, user_id, public_key, aaguid, attestation_hash,
-                 combined_key_hash, resident_key, created_at, is_admin)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
-            """,
-            (
-                normalized_credential_id,
-                user_id,
-                public_key,
-                aaguid,
-                attestation_hash,
-                combined_key_hash,
-                resident_key,
-                is_admin,
-            ),
-        )
+            conn.commit()
+            conn.close()
 
-        conn.commit()
-        conn.close()
+            session["authenticated"] = True
+            session["user_id"] = user_id
+            session.pop("user_id_for_registration", None)
 
-        session["authenticated"] = True
-        session["user_id"] = user_id
-        session.pop("user_id_for_registration", None)
-
-        return jsonify({"status": "success", "userId": user_id})
+            return jsonify({"status": "success", "userId": user_id})
+        except Exception as sqlite_error:
+            conn.close()
+            if "UNIQUE constraint failed" in str(sqlite_error) and "public_key" in str(sqlite_error):
+                return jsonify(
+                    {
+                        "error": "This security key is already registered. Each physical security key can only be registered once."
+                    }
+                ), 409
+            raise
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500

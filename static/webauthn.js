@@ -392,9 +392,15 @@ const webAuthn = {
         .then(response => {
             this.log(`Response status: ${response.status}`);
             if (!response.ok) {
-                return response.text().then(text => {
-                    this.log(`Error response: ${text}`);
-                    throw new Error(`Failed to complete registration (${response.status}): ${text}`);
+                return response.json().then(data => {
+                    const errorMsg = data.error || `Registration failed (${response.status})`;
+                    this.log(`Error response: ${errorMsg}`);
+                    throw new Error(errorMsg);
+                }).catch(parseError => {
+                    return response.text().then(text => {
+                        this.log(`Error response (not JSON): ${text}`);
+                        throw new Error(`Failed to complete registration (${response.status}): ${text}`);
+                    });
                 });
             }
             return response.json();
