@@ -25,34 +25,34 @@ auth_bp = Blueprint("auth", __name__)
 @auth_bp.route("/register_options", methods=["POST"])
 def webauthn_register_options():
     try:
-        # Check if user is authenticated and allowed to register
+        total_users = get_total_users()
         is_authenticated = session.get("authenticated", False)
         user_id = session.get("user_id", None) if is_authenticated else None
         
-        # If user is authenticated, only allow if they're admin
-        if is_authenticated and user_id:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT is_admin FROM security_keys WHERE user_id = ?", (user_id,))
-                result = cursor.fetchone()
-                conn.close()
-                
-                if not result or not bool(result[0]):
-                    return jsonify({"error": "Only administrators can register new keys"}), 403
-            except Exception as e:
-                print(f"Error checking admin status: {e}")
-                return jsonify({"error": "Failed to verify admin status"}), 500
+        # If there are existing users, registration requires admin permission
+        if total_users > 0:
+            # If not authenticated, reject
+            if not is_authenticated or not user_id:
+                can_reg, error_msg = can_register()
+                if not can_reg:
+                    return jsonify({"error": error_msg}), 403
+                # If registration is enabled, allow unauthenticated registration
+            else:
+                # If authenticated, must be admin to register
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT is_admin FROM security_keys WHERE user_id = ?", (user_id,))
+                    result = cursor.fetchone()
+                    conn.close()
+                    
+                    if not result or not bool(result[0]):
+                        return jsonify({"error": "Only administrators can register new keys"}), 403
+                except Exception as e:
+                    print(f"Error checking admin status: {e}")
+                    return jsonify({"error": "Failed to verify admin status"}), 500
         
-        # Check if registration is globally enabled (unless it's first registration)
-        can_reg, error_msg = can_register()
-        if not can_reg:
-            # Allow registration for admins or if no users exist yet
-            total_users = get_total_users()
-            if total_users > 0 and not (is_authenticated and user_id):
-                return jsonify({"error": error_msg}), 403
-
-        total_users = get_total_users()
+        # If no users exist (first setup), allow registration without authentication
 
         user_id_raw = secrets.token_bytes(16)
         user_id = bytes_to_base64url(user_id_raw)
