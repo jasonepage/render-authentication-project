@@ -84,7 +84,7 @@ const publicChat = {
         this.elements.messagesContainer.innerHTML = '';
         
         if (messages.length === 0) {
-            this.showSystemMessage('No messages yet. Be the first to send a message!');
+            this.showSystemMessage('No messages yet.');
             return;
         }
         
