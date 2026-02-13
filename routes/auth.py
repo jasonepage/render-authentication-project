@@ -172,7 +172,7 @@ def webauthn_register_complete():
                 conn = get_db_connection()
                 cursor = conn.cursor()
 
-                public_key = json.dumps(
+                credential_data = json.dumps(
                     {
                         "id": credential_id,
                         "type": data.get("type", "public-key"),
@@ -188,14 +188,15 @@ def webauthn_register_complete():
                     cursor.execute(
                         """
                         INSERT INTO security_keys
-                            (credential_id, user_id, public_key, aaguid, attestation_hash,
+                            (credential_id, user_id, public_key, credential_data, aaguid, attestation_hash,
                              combined_key_hash, resident_key, created_at, is_admin)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
                         """,
                         (
                             normalized_credential_id,
                             existing_user_by_key,
-                            public_key,
+                            public_key_pem,
+                            credential_data,
                             aaguid,
                             attestation_hash,
                             combined_key_hash,
@@ -233,7 +234,7 @@ def webauthn_register_complete():
         user_count = cursor.fetchone()[0]
         is_admin = user_count == 0
 
-        public_key = json.dumps(
+        credential_data = json.dumps(
             {
                 "id": credential_id,
                 "type": data.get("type", "public-key"),
@@ -249,14 +250,15 @@ def webauthn_register_complete():
             cursor.execute(
                 """
                 INSERT INTO security_keys
-                    (credential_id, user_id, public_key, aaguid, attestation_hash,
+                    (credential_id, user_id, public_key, credential_data, aaguid, attestation_hash,
                      combined_key_hash, resident_key, created_at, is_admin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
                 """,
                 (
                     normalized_credential_id,
                     user_id,
-                    public_key,
+                    public_key_pem,
+                    credential_data,
                     aaguid,
                     attestation_hash,
                     combined_key_hash,

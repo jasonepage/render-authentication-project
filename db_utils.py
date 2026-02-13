@@ -22,6 +22,7 @@ def init_db():
             credential_id TEXT UNIQUE NOT NULL,
             user_id TEXT NOT NULL,
             public_key TEXT UNIQUE NOT NULL,
+            credential_data TEXT,
             aaguid TEXT,
             attestation_hash TEXT,
             combined_key_hash TEXT,
@@ -145,6 +146,7 @@ def _migrate_add_public_key_unique(conn):
                     credential_id TEXT UNIQUE NOT NULL,
                     user_id TEXT NOT NULL,
                     public_key TEXT UNIQUE NOT NULL,
+                    credential_data TEXT,
                     aaguid TEXT,
                     attestation_hash TEXT,
                     combined_key_hash TEXT,
@@ -155,10 +157,10 @@ def _migrate_add_public_key_unique(conn):
                 )
             """)
             
-            # Copy data back
+            # Copy data back (credential_data will be NULL for old entries)
             cursor.execute("""
                 INSERT INTO security_keys 
-                SELECT id, credential_id, user_id, public_key, aaguid, attestation_hash, 
+                SELECT id, credential_id, user_id, public_key, NULL, aaguid, attestation_hash, 
                        combined_key_hash, resident_key, created_at, username, is_admin
                 FROM security_keys_old
             """)
