@@ -651,6 +651,15 @@ const webAuthn = {
         return false; // Prevent form submission
     },
 
+    // Basic external key support check (privacy-first; no device probing)
+    checkExternalKeySupport: async function() {
+        if (!window.PublicKeyCredential) {
+            return false;
+        }
+
+        return true;
+    },
+
     // Logout
     logout: function() {
         this.log('Logging out');

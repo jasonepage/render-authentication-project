@@ -141,57 +141,58 @@ def webauthn_register_complete():
                 }
             )
 
-        existing_user_by_key = find_existing_user_by_key(
-            aaguid, public_key_pem, combined_key_hash
-        )
-        if existing_user_by_key:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            public_key = json.dumps(
-                {
-                    "id": credential_id,
-                    "type": data.get("type", "public-key"),
-                    "publicKey": public_key_pem,
-                    "attestation": {
-                        "clientDataJSON": data["response"]["clientDataJSON"],
-                        "attestationObject": data["response"]["attestationObject"],
-                    },
-                }
+        if combined_key_hash:
+            existing_user_by_key = find_existing_user_by_key(
+                aaguid, public_key_pem, combined_key_hash
             )
+            if existing_user_by_key:
+                conn = get_db_connection()
+                cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                INSERT INTO security_keys
-                    (credential_id, user_id, public_key, aaguid, attestation_hash,
-                     combined_key_hash, resident_key, created_at, is_admin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
-                """,
-                (
-                    normalized_credential_id,
-                    existing_user_by_key,
-                    public_key,
-                    aaguid,
-                    attestation_hash,
-                    combined_key_hash,
-                    resident_key,
-                ),
-            )
+                public_key = json.dumps(
+                    {
+                        "id": credential_id,
+                        "type": data.get("type", "public-key"),
+                        "publicKey": public_key_pem,
+                        "attestation": {
+                            "clientDataJSON": data["response"]["clientDataJSON"],
+                            "attestationObject": data["response"]["attestationObject"],
+                        },
+                    }
+                )
 
-            conn.commit()
-            conn.close()
+                cursor.execute(
+                    """
+                    INSERT INTO security_keys
+                        (credential_id, user_id, public_key, aaguid, attestation_hash,
+                         combined_key_hash, resident_key, created_at, is_admin)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)
+                    """,
+                    (
+                        normalized_credential_id,
+                        existing_user_by_key,
+                        public_key,
+                        aaguid,
+                        attestation_hash,
+                        combined_key_hash,
+                        resident_key,
+                    ),
+                )
 
-            session["authenticated"] = True
-            session["user_id"] = existing_user_by_key
-            session.pop("user_id_for_registration", None)
+                conn.commit()
+                conn.close()
 
-            return jsonify(
-                {
-                    "status": "credential_added",
-                    "message": "New device credential added to your existing account",
-                    "userId": existing_user_by_key,
-                }
-            )
+                session["authenticated"] = True
+                session["user_id"] = existing_user_by_key
+                session.pop("user_id_for_registration", None)
+
+                return jsonify(
+                    {
+                        "status": "credential_added",
+                        "message": "New device credential added to your existing account",
+                        "userId": existing_user_by_key,
+                    }
+                )
 
         public_key = json.dumps(
             {
