@@ -25,6 +25,11 @@ def serve_info():
     return render_template("info.html")
 
 
+@pages_bp.route("/admin")
+def serve_admin():
+    return render_template("admin.html")
+
+
 @pages_bp.route("/<path:path>")
 def serve_static(path):
     try:
