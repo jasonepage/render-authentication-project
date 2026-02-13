@@ -178,9 +178,17 @@ def extract_public_key_from_attestation(attestation_object):
 
 def verify_authenticator_signature(public_key_data, client_data_hash, authenticator_data, signature):
     try:
-        stored_key = json.loads(public_key_data)
+        # Handle both formats: PEM string directly or JSON object with publicKey field
+        if public_key_data.startswith('-----BEGIN'):
+            # It's a PEM string directly
+            public_key_pem = public_key_data
+        else:
+            # It's a JSON object with publicKey field
+            stored_key = json.loads(public_key_data)
+            public_key_pem = stored_key["publicKey"]
+        
         signed_data = authenticator_data + client_data_hash
-        public_key = serialization.load_pem_public_key(stored_key["publicKey"].encode())
+        public_key = serialization.load_pem_public_key(public_key_pem.encode())
 
         try:
             public_key.verify(signature, signed_data, ec.ECDSA(hashes.SHA256()))
