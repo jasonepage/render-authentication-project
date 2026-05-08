@@ -3,25 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protest Chat - Secure Communication</title>
+    <title>Auth Chat</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🔒 Protest Chat</h1>
-            <nav style="margin-top: 10px;">
-                <a href="/map" class="btn btn-secondary" style="margin-right: 10px;">📍 Map</a>
-                <a href="/info" class="btn btn-secondary">ℹ️ Info</a>
+            <div class="brand">
+                <div class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                </div>
+                <h1>Auth Chat</h1>
+            </div>
+            <nav>
+                <a href="/map" class="btn-secondary action-button">Map</a>
+                <a href="/info" class="btn-secondary action-button">Info</a>
             </nav>
         </header>
 
-        <!-- Authentication Status Section -->
         <div id="auth-status" class="auth-section">
             <p>Checking authentication status...</p>
         </div>
 
-        <!-- Modal for Authentication Operations -->
         <div id="auth-modal" class="modal" style="display: none;">
             <div class="modal-content">
                 <p id="modal-text">Please follow your security key's instructions...</p>
@@ -29,26 +32,23 @@
             </div>
         </div>
 
-        <!-- Chat Section -->
         <div class="chat-section">
-            <!-- Public Chat - Visible to all users -->
             <div class="public-chat-container">
-                <h2>Public Chat</h2>
-                <p class="chat-description">Open forum for all. Login with security key to send messages.</p>
+                <h2>Public</h2>
+                <p class="chat-description">Open channel. Authenticate with a security key to send messages.</p>
                 <div id="public-messages" class="messages-container"></div>
                 <div class="chat-input-container">
-                    <input type="text" id="public-message-input" placeholder="Login with security key to send..." autocomplete="off">
+                    <input type="text" id="public-message-input" placeholder="Authenticate to send..." autocomplete="off">
                     <button id="public-send-button">Send</button>
                 </div>
             </div>
 
-            <!-- Private Chat - Only visible when logged in -->
             <div id="private-chat-container" class="private-chat-container" style="display: none;">
-                <h2>Private Chat</h2>
-                <p class="chat-description">Secure channel for verified activists only.</p>
+                <h2>Private</h2>
+                <p class="chat-description">Secure channel for verified members.</p>
                 <div id="private-messages" class="messages-container"></div>
                 <div class="chat-input-container">
-                    <input type="text" id="private-message-input" placeholder="Secure messaging..." autocomplete="off">
+                    <input type="text" id="private-message-input" placeholder="Send a secure message..." autocomplete="off">
                     <button id="private-send-button">Send</button>
                 </div>
             </div>
@@ -59,4 +59,4 @@
     <script src="publicchat.js"></script>
     <script src="privatechat.js"></script>
 </body>
-</html> 
+</html>

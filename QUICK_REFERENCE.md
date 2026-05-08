@@ -1,4 +1,4 @@
-# Quick Reference Guide - Protest Chat
+# Quick Reference Guide - Auth Chat
 
 ## For Deployers: Configuration Checklist
 
@@ -89,9 +89,9 @@ MAX_USERS=50
 Edit `static/style.css`:
 ```css
 :root {
-    --accent-blue: #1da1f2;    /* Buttons, links */
-    --bg-primary: #15202b;     /* Background */
-    --text-primary: #ffffff;   /* Text color */
+    --accent: #10b981;         /* Buttons, links */
+    --bg-primary: #0f172a;     /* Background */
+    --text-primary: #f1f5f9;   /* Text color */
 }
 ```
 
@@ -124,7 +124,7 @@ DB_PATH=/app/webauthn.db
 ### Self-Hosted Linux
 ```bash
 DEPLOYMENT_URL=https://yourdomain.com
-DB_PATH=/var/lib/protestchat/webauthn.db
+DB_PATH=/var/lib/authchat/webauthn.db
 ```
 
 ### Local Development

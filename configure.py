@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Protest Chat Configuration Helper
-Helps you set up the necessary configuration for deploying Protest Chat
+Auth Chat Configuration Helper
+Helps you set up the necessary configuration for deploying Auth Chat
 """
 
 import secrets
@@ -14,7 +14,7 @@ def generate_secret_key():
 
 def main():
     print("=" * 70)
-    print("  PROTEST CHAT - Configuration Setup")
+    print("  AUTH CHAT - Configuration Setup")
     print("=" * 70)
     print()
     
@@ -52,7 +52,7 @@ def main():
     db_paths = {
         '1': '/opt/render/webauthn.db',
         '2': '/app/webauthn.db',
-        '3': '/var/lib/protestchat/webauthn.db',
+        '3': '/var/lib/authchat/webauthn.db',
         '4': './webauthn.db'
     }
     
@@ -114,7 +114,7 @@ def main():
     save = input("Save configuration to .env file? (y/n): ").strip().lower()
     if save == 'y':
         with open('.env', 'w') as f:
-            f.write(f"# Protest Chat Configuration\n")
+            f.write(f"# Auth Chat Configuration\n")
             f.write(f"# Generated on {__import__('datetime').datetime.now().isoformat()}\n\n")
             f.write(f"DEPLOYMENT_URL={deployment_url}\n")
             f.write(f"SECRET_KEY={secret_key}\n")

@@ -1,250 +1,160 @@
-# Protest Chat 🔐
+# Auth Chat
 
-A secure, privacy-focused chat application designed for activists and protesters. Uses physical security keys (FIDO2/WebAuthn) for authentication and supports up to 25 registered users.
+A passwordless real-time chat application built on FIDO2 / WebAuthn. Authentication is hardware-bound: only physical security keys (YubiKey, Titan, etc.) are accepted — no platform or phone authenticators. Backed by Flask, SQLite, and a small zero-dependency frontend.
 
 ## Features
 
-- 🔑 **Physical Security Keys Only** - YubiKey, Titan, etc. (no phone/tablet authenticators)
-- 💬 **Dual Chat Channels** - Public (visible to all) and Private (authenticated only)
-- 🌙 **Dark Mode UI** - Twitter-inspired interface for readability
-- 🔒 **Maximum Security** - WebAuthn authentication, HTTPS-only sessions
-- 👥 **Limited Capacity** - Capped at 25 users for small, trusted groups
-- 🚀 **Easy Deployment** - Works on Render, Heroku, or self-hosted
+- **Hardware-bound authentication** — FIDO2 / WebAuthn with cross-platform attachment only
+- **Public + private channels** — open read-only feed, gated send, and a private channel for verified members
+- **Live location map** — opt-in real-time location sharing for authenticated users (Leaflet)
+- **Anonymous identities** — generated handles, no PII collected
+- **Per-endpoint rate limiting** and hardened session cookies (`Secure`, `HttpOnly`, `SameSite=Strict`)
+- **Single-binary deploy** — Flask + SQLite, no external services required
+
+## Tech Stack
+
+- **Backend:** Python 3.8+, Flask, SQLite
+- **Auth:** WebAuthn / FIDO2 (cross-platform attachment)
+- **Frontend:** Vanilla JavaScript, CSS (no build step)
+- **Map:** Leaflet
+- **Deploy:** Render.com / Heroku / self-hosted (Procfile + render.yaml included)
 
 ## Quick Start
 
 ### Prerequisites
 - Python 3.8+
-- Physical security key (YubiKey, Titan, etc.)
-- Modern browser with WebAuthn support
+- A physical security key (YubiKey, Titan, etc.)
+- A WebAuthn-capable browser (Chrome, Firefox, Edge, Safari 14+)
 
-### Installation
+### Local development
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/yourusername/render-authentication-project.git
-   cd render-authentication-project
-   ```
+```bash
+git clone https://github.com/yourusername/render-authentication-project.git
+cd render-authentication-project
+pip install -r requirements.txt
 
-2. **Run configuration helper**
-   ```bash
-   python configure.py
-   ```
-   This will guide you through setting up your deployment.
+export DEPLOYMENT_URL="http://localhost:5000"
+python app.py
+```
 
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+Then open `http://localhost:5000`.
 
-4. **Test locally**
-   ```bash
-   export DEPLOYMENT_URL="http://localhost:5000"
-   python app.py
-   ```
-   Visit `http://localhost:5000` and test with your security key.
+### Configuration helper
 
-### Deployment
+```bash
+python configure.py
+```
 
-#### Quick Deploy to Render.com
-1. Fork this repository
-2. Create new Web Service on Render
-3. Set environment variables:
-   - `SECRET_KEY`: Your secure secret key (from configure.py)
-   - `DEPLOYMENT_URL`: Your Render URL
-   - `DB_PATH`: `/opt/render/webauthn.db`
-4. Deploy!
+Walks through generating a secret key and producing a `.env` for your target host.
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions.
+## Deploy to Render
+
+1. Push to GitHub and create a new Web Service on Render.
+2. Set environment variables:
+   - `SECRET_KEY` — generate with `python -c "import secrets; print(secrets.token_hex(32))"`
+   - `DEPLOYMENT_URL` — your Render URL
+   - `DB_PATH` — `/opt/render/webauthn.db`
+3. Deploy.
+
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for Heroku and self-hosted instructions.
 
 ## Configuration
 
-### Essential Settings
+All configuration is environment-variable driven:
 
-All configuration is done via environment variables or by editing these files:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEPLOYMENT_URL` | — | Public URL of the deployment (required for WebAuthn origin check) |
+| `SECRET_KEY` | — | Flask session encryption key |
+| `DB_PATH` | `./webauthn.db` | SQLite database path |
+| `MAX_USERS` | `25` | Maximum registered users |
 
-**Backend (app.py)**
-- Uses environment variables for deployment (no code changes needed!)
-- `DEPLOYMENT_URL`: Your domain
-- `SECRET_KEY`: Session encryption key
-- `DB_PATH`: Database file location
+### Theming
 
-**Frontend (JavaScript)**
-- `static/publicchat.js` - Update `SERVER_URL` to your domain
-- `static/privatechat.js` - Update `SERVER_URL` to your domain
-- `static/webauthn.js` - Auto-detects domain (usually no changes needed)
+CSS variables live at the top of `static/style.css`:
 
-### Customization
-
-**Change max users:**
-```python
-# Set environment variable
-MAX_USERS=50  # Default is 25
-```
-
-**Change colors:**
-Edit CSS variables in `static/style.css`:
 ```css
 :root {
-    --accent-blue: #1da1f2;  /* Change primary color */
-    --bg-primary: #15202b;   /* Change background */
-    /* ... more variables ... */
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --accent: #10b981;
+    --accent-hover: #34d399;
+    --text-primary: #f1f5f9;
+    /* ... */
 }
 ```
 
-**Change branding:**
-- Edit page titles in `templates/index.html` and `templates/info.html`
-
 ## Architecture
 
-### File Structure
 ```
-protest-chat/
-├── app.py                  # Flask backend (main application)
-├── configure.py            # Configuration helper script
-├── requirements.txt        # Python dependencies
-├── DEPLOYMENT_GUIDE.md     # Detailed deployment instructions
+.
+├── app.py                 # Flask entrypoint, blueprint registration
+├── routes/
+│   ├── auth.py            # WebAuthn register / login / logout
+│   ├── chat.py            # Public + private message endpoints
+│   ├── map.py             # Location sharing endpoints
+│   ├── admin.py           # Registration toggle, debug
+│   └── pages.py           # Template routes
+├── webauthn_utils.py      # FIDO2 challenge / verification helpers
+├── db_utils.py            # SQLite schema + connection
 ├── static/
-│   ├── webauthn.js        # WebAuthn authentication handler
-│   ├── publicchat.js      # Public chat interface
-│   ├── privatechat.js     # Private chat interface
-│   └── style.css          # Dark mode UI styling
+│   ├── webauthn.js        # WebAuthn client
+│   ├── publicchat.js      # Public chat polling + render
+│   ├── privatechat.js     # Private chat polling + render
+│   ├── map.js             # Leaflet integration
+│   └── style.css          # Slate + emerald theme
 └── templates/
-    ├── index.html         # Main chat page
-    └── info.html          # Information/help page
+    ├── index.html         # Chat
+    ├── map.html           # Live map
+    ├── admin.html         # Admin controls
+    └── info.html          # About / docs
 ```
 
-### Technology Stack
-- **Backend**: Python 3.8+, Flask
-- **Authentication**: WebAuthn/FIDO2 (physical security keys)
-- **Database**: SQLite (local file)
-- **Frontend**: Vanilla JavaScript, CSS
-- **Hosting**: Render.com (or Heroku, self-hosted)
+### Database
 
-### Security Features
-- Physical security key requirement (cross-platform attachment)
-- HTTPS-only session cookies
-- CSRF protection (SameSite=Strict)
-- Rate limiting on API endpoints
-- No password storage (passwordless authentication)
-- Secure session management
+Three tables, created on first run:
+
+- `security_keys` — credential ID, user ID, public key, AAGUID, handle
+- `messages` — public chat
+- `private_messages` — gated chat
+
+### Security
+
+- WebAuthn cross-platform attachment only (rejects platform/phone authenticators)
+- HTTPS-only session cookies, `SameSite=Strict`
+- Per-endpoint rate limiting
+- No password storage — credentials are public-key only
+- Output sanitization on user-supplied content (incl. image URLs)
 
 ## Usage
 
-### For Users
+### First user
+1. Visit the deployment.
+2. Click **Register New Key**, insert your security key, touch to confirm.
+3. The first registered user becomes the admin.
 
-1. **First Visit** - Register your security key
-   - Click "Register Key"
-   - Insert your physical security key when prompted
-   - Touch the key to confirm
+### Returning users
+1. Click **Login with Security Key**.
+2. Insert the same key and touch to authenticate.
 
-2. **Public Chat** - Available to everyone
-   - View messages without logging in
-   - Must authenticate to send messages
+### Reset
 
-3. **Private Chat** - Authenticated users only
-   - Only visible after logging in with security key
-   - Secure channel for sensitive coordination
-
-4. **Returning** - Login with your key
-   - Click "Login"
-   - Insert the same security key
-   - Touch to authenticate
-
-### For Administrators
-
-The system is designed to be self-managing:
-- First 25 people to register get access
-- After that, registration closes automatically
-- No admin panel needed (simplified from earlier versions)
-
-To reset the system:
 ```bash
-# Connect to database
 sqlite3 /path/to/webauthn.db
-
-# Check current users
-SELECT COUNT(*) FROM security_keys;
-
-# Remove all users (use with caution!)
-DELETE FROM security_keys;
-DELETE FROM messages;
-DELETE FROM private_messages;
+sqlite> DELETE FROM security_keys;
+sqlite> DELETE FROM messages;
+sqlite> DELETE FROM private_messages;
 ```
-
-## Development
-
-### Code Structure
-
-The codebase is organized into modular components:
-
-**Backend Modules (app.py)**
-- Configuration section (environment variables)
-- Database functions (init_db, get_db_connection)
-- WebAuthn endpoints (register, login, logout)
-- Chat endpoints (public/private messages)
-- Utility functions (rate limiting, helpers)
-
-**Frontend Modules**
-- `webauthn.js` - Authentication logic
-- `publicchat.js` - Public chat handler
-- `privatechat.js` - Private chat handler
-- `style.css` - UI styling
-
-### Adding Features
-
-All files are heavily commented for easy modification.
-
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add comments to your code
-4. Test with a physical security key
-5. Submit a pull request
 
 ## Troubleshooting
 
-### Common Issues
+- **"Registration closed"** — increase `MAX_USERS` or remove unused entries from `security_keys`.
+- **Security key not detected** — WebAuthn requires HTTPS and a supported browser.
+- **"Origin mismatch"** — make sure `DEPLOYMENT_URL` matches the actual served origin.
+- **Messages not loading** — check the browser console and server logs; verify the DB path is writable.
 
-**"Registration closed" error**
-- Check current user count in database
-- Increase `MAX_USERS` environment variable if needed
-
-**Security key not detected**
-- Ensure HTTPS is enabled (required for WebAuthn)
-- Try a different browser (Chrome, Firefox, Edge recommended)
-- Check USB connection
-
-**"Origin mismatch" error**
-- Update `DEPLOYMENT_URL` environment variable to match your actual domain
-- Update `SERVER_URL` in publicchat.js and privatechat.js
-
-**Messages not loading**
-- Check browser console for errors
-- Verify database path is writable
-- Check server logs for backend errors
-
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for more troubleshooting tips.
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for more.
 
 ## License
 
-Free to use, modify, and deploy for activist and protest coordination.
-
-## Credits
-
-**Authors**: Chris Becker, Jake McDowell, Jason Page  
-**Date**: March 8, 2024 - February 12, 2026  
-**Purpose**: Secure communication for activists and protesters
-
-## Support
-
-For questions or issues:
-1. Check [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
-2. Review browser console / server logs
-3. Verify configuration matches deployment
-4. Test with a different security key
-
----
-
-**Stay safe, stay secure, stay connected.** ✊
+Free to use, modify, and deploy.

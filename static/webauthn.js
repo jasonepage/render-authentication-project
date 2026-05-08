@@ -1,11 +1,11 @@
 /**
  * ============================================================================
- * WEBAUTHN CLIENT - Protest Chat Security Key Authentication
+ * WEBAUTHN CLIENT - Auth Chat Security Key Authentication
  * ============================================================================
  * @file webauthn.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date March 8, 2024
- * @description Core WebAuthn functionality for Protest Chat
+ * @description Core WebAuthn functionality for Auth Chat
  *              Handles registration, authentication, and key management
  * 
  * DEPLOYMENT CONFIGURATION:

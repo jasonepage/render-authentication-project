@@ -3,26 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Panel - Register Keys & Settings</title>
+    <title>Auth Chat — Admin</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🔑 Admin Panel</h1>
-            <nav style="margin-top: 10px;">
-                <a href="/chat" class="btn btn-secondary" style="margin-right: 10px;">💬 Chat</a>
-                <a href="/map" class="btn btn-secondary" style="margin-right: 10px;">📍 Map</a>
-                <a href="/info" class="btn btn-secondary">ℹ️ Info</a>
+            <div class="brand">
+                <div class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                </div>
+                <h1>Admin</h1>
+            </div>
+            <nav>
+                <a href="/chat" class="btn-secondary action-button">Chat</a>
+                <a href="/map" class="btn-secondary action-button">Map</a>
+                <a href="/info" class="btn-secondary action-button">Info</a>
             </nav>
         </header>
 
-        <!-- Authentication Status Section -->
         <div id="auth-status" class="auth-section">
             <p>Checking authentication status...</p>
         </div>
 
-        <!-- Modal for Operations -->
         <div id="auth-modal" class="modal" style="display: none;">
             <div class="modal-content">
                 <p id="modal-text">Please follow your security key's instructions...</p>
@@ -30,56 +33,51 @@
             </div>
         </div>
 
-        <!-- Admin Section -->
         <div class="admin-section">
-            <!-- Register New Key Section (admin only) -->
             <div id="register-key-section" class="admin-card" style="display: none;">
                 <h2>Register New Key</h2>
-                <p>Register a new security key to your account. You can register multiple keys and use any of them to log in.</p>
-                <button onclick="webAuthn.registerKey(); return false;" class="button register-button">🔐 Register New Key</button>
+                <p>Register an additional security key to your account. You can use any registered key to sign in.</p>
+                <button onclick="webAuthn.registerKey(); return false;" class="register-button">Register New Key</button>
             </div>
 
-            <!-- Admin Controls Section (only visible to admins) -->
             <div id="admin-controls-section" class="admin-card" style="display: none;">
                 <h2>Admin Controls</h2>
-                
+
                 <div class="control-group">
-                    <h3>Username Management</h3>
-                    <p>Generate a new random username.</p>
-                    <button onclick="webAuthn.cycleUsername(); return false;" class="button cycle-username-button">🎲 Generate New Username</button>
+                    <h3>Username</h3>
+                    <p>Generate a new random handle for your session.</p>
+                    <button onclick="webAuthn.cycleUsername(); return false;" class="cycle-username-button">Generate New Username</button>
                 </div>
 
                 <div class="control-group">
-                    <h3>Registration Settings</h3>
+                    <h3>Registration</h3>
                     <p>Control whether new users can register security keys.</p>
                     <div id="registration-status" class="status-box">
                         <p>Loading registration status...</p>
                     </div>
-                    <button onclick="webAuthn.toggleRegistration(); return false;" class="button toggle-reg-button">Updating...</button>
+                    <button onclick="webAuthn.toggleRegistration(); return false;" class="toggle-reg-button">Updating...</button>
                 </div>
 
                 <div class="control-group">
-                    <h3>Debug Information</h3>
-                    <p>View server state and debug information. Check browser console for details.</p>
-                    <button onclick="webAuthn.debugState(); return false;" class="button debug-button">🐛 View Debug Info</button>
+                    <h3>Debug</h3>
+                    <p>Dump server state to the browser console.</p>
+                    <button onclick="webAuthn.debugState(); return false;" class="btn-secondary debug-button">View Debug Info</button>
                 </div>
             </div>
 
-            <!-- User Info when Authenticated -->
             <div id="user-info-section" class="admin-card" style="display: none;">
-                <h2>Your Account</h2>
+                <h2>Account</h2>
                 <div id="user-details"></div>
-                <div style="margin-top: 15px;">
-                    <button onclick="webAuthn.logout(); return false;" class="button logout-button">Logout</button>
+                <div style="margin-top: 16px;">
+                    <button onclick="webAuthn.logout(); return false;" class="logout-button">Logout</button>
                 </div>
             </div>
 
-            <!-- Login/Register Section when Not Authenticated -->
             <div id="login-section" class="admin-card" style="display: none;">
                 <h2>Authentication</h2>
-                <p>Log in with an existing security key or register a new one.</p>
+                <p>Sign in with an existing security key, or register a new one.</p>
                 <div class="auth-buttons">
-                    <button onclick="webAuthn.loginWithKey(); return false;" class="button login-button">Login with Security Key</button>
+                    <button onclick="webAuthn.loginWithKey(); return false;" class="login-button">Login with Security Key</button>
                 </div>
             </div>
         </div>
@@ -87,20 +85,17 @@
 
     <script src="webauthn.js"></script>
     <script>
-        // Initialize admin page
         document.addEventListener('DOMContentLoaded', function() {
-            // First, check if this is the first user
             fetch('/check_registration_status')
                 .then(response => response.json())
                 .then(regStatus => {
                     const isFirstUser = regStatus.totalUsers === 0;
-                    
+
                     webAuthn.checkAuthStatus().then(status => {
                         if (status.authenticated) {
                             document.getElementById('login-section').style.display = 'none';
                             document.getElementById('user-info-section').style.display = 'block';
-                            
-                            // Show register key section to admins
+
                             if (status.isAdmin) {
                                 document.getElementById('register-key-section').style.display = 'block';
                                 document.getElementById('admin-controls-section').style.display = 'block';
@@ -108,19 +103,17 @@
                                 document.getElementById('register-key-section').style.display = 'none';
                                 document.getElementById('admin-controls-section').style.display = 'none';
                             }
-                            
-                            // Display user details
+
                             const userDetailsDiv = document.getElementById('user-details');
                             const displayUserId = status.userId ? status.userId.substring(0, 8) + '...' : 'Unknown';
                             const username = status.username || 'Anonymous';
-                            
+
                             userDetailsDiv.innerHTML = `
                                 <p><strong>Username:</strong> <span class="username-value">${username}</span></p>
                                 <p><strong>User ID:</strong> <span class="user-id-value" title="${status.userId || ''}">${displayUserId}</span></p>
-                                ${status.isAdmin ? '<p><strong>Role:</strong> 👑 Administrator</p>' : ''}
+                                ${status.isAdmin ? '<p><strong>Role:</strong> Administrator</p>' : ''}
                             `;
-                            
-                            // Update registration status if admin
+
                             if (status.isAdmin) {
                                 updateRegistrationStatus();
                             }
@@ -128,8 +121,7 @@
                             document.getElementById('login-section').style.display = 'block';
                             document.getElementById('user-info-section').style.display = 'none';
                             document.getElementById('admin-controls-section').style.display = 'none';
-                            
-                            // Show register section only if this is the first user
+
                             if (isFirstUser) {
                                 document.getElementById('register-key-section').style.display = 'block';
                             } else {
@@ -144,7 +136,7 @@
                         if (status.authenticated) {
                             document.getElementById('login-section').style.display = 'none';
                             document.getElementById('user-info-section').style.display = 'block';
-                            
+
                             if (status.isAdmin) {
                                 document.getElementById('register-key-section').style.display = 'block';
                                 document.getElementById('admin-controls-section').style.display = 'block';
@@ -167,13 +159,13 @@
                 .then(response => response.json())
                 .then(data => {
                     const regStatus = data.registrationEnabled ? 'enabled' : 'disabled';
-                    const statusColor = data.registrationEnabled ? '#4CAF50' : '#FF9800';
-                    const buttonText = data.registrationEnabled ? '🔒 Disable Registration' : '🔓 Enable Registration';
-                    
+                    const statusColor = data.registrationEnabled ? 'var(--accent-hover)' : 'var(--warning)';
+                    const buttonText = data.registrationEnabled ? 'Disable Registration' : 'Enable Registration';
+
                     document.getElementById('registration-status').innerHTML = `
                         <p>Registration is currently <strong style="color: ${statusColor};">${regStatus}</strong></p>
                     `;
-                    
+
                     const toggleButton = document.querySelector('.toggle-reg-button');
                     if (toggleButton) {
                         toggleButton.textContent = buttonText;
@@ -185,7 +177,6 @@
                 });
         }
 
-        // Listen for registration status changes
         document.addEventListener('registrationToggled', updateRegistrationStatus);
     </script>
 </body>

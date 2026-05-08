@@ -1,5 +1,5 @@
 /**
- * Map.js - Live Location Sharing for Protest Chat
+ * Map.js - Live Location Sharing for Auth Chat
  * Handles real-time location updates and map display for authenticated users
  */
 

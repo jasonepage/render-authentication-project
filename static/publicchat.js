@@ -1,11 +1,11 @@
 /**
  * ============================================================================
- * PUBLIC CHAT HANDLER - Protest Chat
+ * PUBLIC CHAT HANDLER - Auth Chat
  * ============================================================================
  * @file publicchat.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date February 12, 2026
- * @description Public chat functionality for Protest Chat
+ * @description Public chat functionality for Auth Chat
  *              
  * VISIBILITY: All users (authenticated and anonymous) can view messages
  * POSTING: Only authenticated users with security keys can send messages

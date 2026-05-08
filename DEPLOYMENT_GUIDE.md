@@ -1,7 +1,7 @@
-# Protest Chat - Deployment Guide
+# Auth Chat — Deployment Guide
 
 ## Overview
-Protest Chat is a secure communication platform designed for activists and protesters. It uses physical security keys (like YubiKey) for authentication and supports up to 25 registered users with public and private chat channels.
+Auth Chat is a passwordless real-time chat platform built on FIDO2 / WebAuthn. Authentication is hardware-bound — only physical security keys (YubiKey, Titan, etc.) are accepted. Supports up to 25 registered users by default, with public and private chat channels and an opt-in live location map.
 
 ## Prerequisites
 - Python 3.8 or higher
@@ -77,11 +77,11 @@ Visit `http://localhost:5000` to test.
 
 | Variable | Location | Description | Example |
 |----------|----------|-------------|---------|
-| `DEPLOYMENT_URL` | Line 31 | Your website URL | `https://protest-chat.com` |
+| `DEPLOYMENT_URL` | Line 31 | Your website URL | `https://auth-chat.example.com` |
 | `SECRET_KEY` | Line 33 | Flask session encryption key | Generate with Python secrets |
 | `MAX_USERS` | Line 36 | Maximum registered users | `25` (default) |
 | `DB_PATH` | Line 51 | SQLite database file path | `/opt/render/webauthn.db` |
-| `RP_NAME` | Line 39 | Name shown during auth | `"Protest Chat"` |
+| `RP_NAME` | Line 39 | Name shown during auth | `"Auth Chat"` |
 
 ### Database Structure
 
@@ -187,7 +187,7 @@ sqlite3 /path/to/webauthn.db "SELECT COUNT(*) FROM security_keys"
 
 ## File Structure
 ```
-protest-chat/
+auth-chat/
 ├── app.py                  # Main Flask application (CONFIGURE THIS)
 ├── requirements.txt        # Python dependencies
 ├── Procfile               # Render/Heroku deployment config
@@ -211,4 +211,4 @@ For issues or questions:
 4. Test with a different security key
 
 ## License
-This is free software. Use, modify, and deploy as needed for your protest/activist work.
+Free to use, modify, and deploy.

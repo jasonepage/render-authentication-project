@@ -1,15 +1,15 @@
 /**
  * ============================================================================
- * PRIVATE CHAT HANDLER - Protest Chat
+ * PRIVATE CHAT HANDLER - Auth Chat
  * ============================================================================
  * @file privatechat.js
  * @author Chris Becker, Jake McDowell, Jason Page
  * @date February 12, 2026
- * @description Private chat functionality for Protest Chat
+ * @description Private chat functionality for Auth Chat
  *              
  * VISIBILITY: Only authenticated users with physical security keys
  * POSTING: Only authenticated users with security keys can send messages
- * SECURITY: Maximum security for sensitive protest coordination
+ * SECURITY: Hardware-key authentication required for sensitive coordination
  * 
  * DEPLOYMENT CONFIGURATION:
  * 1. Update SERVER_URL below to match your deployment domain
