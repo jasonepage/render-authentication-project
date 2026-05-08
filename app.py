@@ -5,6 +5,7 @@ from db_utils import init_db
 from routes.admin import admin_bp
 from routes.auth import auth_bp
 from routes.chat import chat_bp
+from routes.demo import demo_bp
 from routes.map import map_bp
 from routes.pages import pages_bp
 
@@ -19,6 +20,7 @@ init_db()
 app.register_blueprint(auth_bp)
 app.register_blueprint(chat_bp)
 app.register_blueprint(admin_bp)
+app.register_blueprint(demo_bp)
 app.register_blueprint(map_bp)
 app.register_blueprint(pages_bp)
 

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auth Chat — WebAuthn Live Walkthrough</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="brand">
+                <div class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                </div>
+                <h1>WebAuthn Walkthrough</h1>
+            </div>
+            <nav>
+                <a href="/chat" class="btn-secondary action-button">Chat</a>
+                <a href="/map" class="btn-secondary action-button">Map</a>
+                <a href="/info" class="btn-secondary action-button">Info</a>
+            </nav>
+        </header>
+
+        <div class="demo-intro">
+            <p>
+                A live, fully-decoded walkthrough of a single WebAuthn round-trip.
+                Every step shows the actual bytes flowing across the wire — challenges,
+                CBOR-decoded attestation objects, COSE public keys, signatures, and the
+                server-side verification checks.
+            </p>
+            <p class="demo-intro-note">
+                <strong>Ephemeral.</strong> This page accepts <em>any</em> authenticator (security keys,
+                Touch ID, Windows Hello, Android biometric) and writes <em>nothing</em> to the
+                database. The credential lives in your session for the auth step, then disappears.
+            </p>
+        </div>
+
+        <div class="demo-tabs" role="tablist">
+            <button id="tab-register" class="demo-tab active" role="tab" data-flow="register">
+                <span class="demo-tab-num">1</span>
+                Registration
+            </button>
+            <button id="tab-auth" class="demo-tab" role="tab" data-flow="auth">
+                <span class="demo-tab-num">2</span>
+                Authentication
+            </button>
+        </div>
+
+        <!-- Registration flow -->
+        <section id="flow-register" class="demo-flow active">
+            <ol class="demo-stepper">
+
+                <li class="demo-step" data-step="reg-1">
+                    <div class="demo-step-head">
+                        <div class="demo-step-meta">
+                            <span class="demo-step-num">1</span>
+                            <div>
+                                <h3 class="demo-step-title">Server generates a challenge</h3>
+                                <p class="demo-step-actor">Server · <code>POST /demo/register/options</code></p>
+                            </div>
+                        </div>
+                        <span class="demo-step-status" data-status>pending</span>
+                    </div>
+                    <div class="demo-step-body">
+                        <p>The server creates 32 random bytes (the <em>challenge</em>) and a random user handle, then assembles a <code>PublicKeyCredentialCreationOptions</code> object. The challenge prevents replay attacks: the authenticator must sign over it, and the server checks that the same value comes back.</p>
+                        <button class="btn-primary" data-action="reg-1">Generate options</button>
+                        <div class="demo-output" data-output></div>
+                    </div>
+                </li>
+
+                <li class="demo-step locked" data-step="reg-2">
+                    <div class="demo-step-head">
+                        <div class="demo-step-meta">
+                            <span class="demo-step-num">2</span>
+                            <div>
+                                <h3 class="demo-step-title">Browser asks the authenticator to create a credential</h3>
+                                <p class="demo-step-actor">Browser → Authenticator · <code>navigator.credentials.create()</code></p>
+                            </div>
+                        </div>
+                        <span class="demo-step-status" data-status>locked</span>
+                    </div>
+                    <div class="demo-step-body">
+                        <p>The browser passes the options to the platform's WebAuthn API. The authenticator (your security key, Touch ID, etc.) generates a fresh keypair, keeps the private key sealed inside, and returns the public key wrapped in an <em>attestation object</em>.</p>
+                        <button class="btn-primary" data-action="reg-2" disabled>Tap your authenticator</button>
+                        <div class="demo-output" data-output></div>
+                    </div>
+                </li>
+
+                <li class="demo-step locked" data-step="reg-3">
+                    <div class="demo-step-head">
+                        <div class="demo-step-meta">
+                            <span class="demo-step-num">3</span>
+                            <div>
+                                <h3 class="demo-step-title">Server decodes &amp; verifies the attestation</h3>
+                                <p class="demo-step-actor">Server · <code>POST /demo/register/verify</code></p>
+                            </div>
+                        </div>
+                        <span class="demo-step-status" data-status>locked</span>
+                    </div>
+                    <div class="demo-step-body">
+                        <p>The server CBOR-decodes the attestation object, parses the <code>authData</code> byte string (rpIdHash, flags, signCount, AAGUID, credentialId, COSE public key), converts the COSE key to a standard PEM, and runs the verification checks.</p>
+                        <button class="btn-primary" data-action="reg-3" disabled>Verify on server</button>
+                        <div class="demo-output" data-output></div>
+                    </div>
+                </li>
+
+            </ol>
+        </section>
+
+        <!-- Authentication flow -->
+        <section id="flow-auth" class="demo-flow">
+            <div class="demo-prereq" id="auth-prereq">
+                <p>Run the registration walkthrough first — the authentication flow signs against the credential you registered above.</p>
+            </div>
+
+            <ol class="demo-stepper" id="auth-stepper" hidden>
+
+                <li class="demo-step" data-step="auth-1">
+                    <div class="demo-step-head">
+                        <div class="demo-step-meta">
+                            <span class="demo-step-num">1</span>
+                            <div>
+                                <h3 class="demo-step-title">Server generates a fresh challenge</h3>
+                                <p class="demo-step-actor">Server · <code>POST /demo/auth/options</code></p>
+                            </div>
+                        </div>
+                        <span class="demo-step-status" data-status>pending</span>
+                    </div>
+                    <div class="demo-step-body">
+                        <p>A new 32-byte challenge for this assertion. The server also lists which credentials it expects (<code>allowCredentials</code>) — here, just the one you registered.</p>
+                        <button class="btn-primary" data-action="auth-1">Generate options</button>
+                        <div class="demo-output" data-output></div>
+                    </div>
+                </li>
+
+                <li class="demo-step locked" data-step="auth-2">
+                    <div class="demo-step-head">
+                        <div class="demo-step-meta">
+                            <span class="demo-step-num">2</span>
+                            <div>
+                                <h3 class="demo-step-title">Browser asks the authenticator to sign</h3>
+                                <p class="demo-step-actor">Browser → Authenticator · <code>navigator.credentials.get()</code></p>
+                            </div>
+                        </div>
+                        <span class="demo-step-status" data-status>locked</span>
+                    </div>
+                    <div class="demo-step-body">
+                        <p>The authenticator looks up the matching private key, builds <code>authenticatorData</code>, concatenates it with <code>SHA-256(clientDataJSON)</code>, and signs the result with the private key — which never leaves the device.</p>
+                        <button class="btn-primary" data-action="auth-2" disabled>Tap your authenticator</button>
+                        <div class="demo-output" data-output></div>
+                    </div>
+                </li>
+
+                <li class="demo-step locked" data-step="auth-3">
+                    <div class="demo-step-head">
+                        <div class="demo-step-meta">
+                            <span class="demo-step-num">3</span>
+                            <div>
+                                <h3 class="demo-step-title">Server verifies the signature</h3>
+                                <p class="demo-step-actor">Server · <code>POST /demo/auth/verify</code></p>
+                            </div>
+                        </div>
+                        <span class="demo-step-status" data-status>locked</span>
+                    </div>
+                    <div class="demo-step-body">
+                        <p>The server checks that the challenge matches, reconstructs the signed payload (<code>authenticatorData ‖ SHA-256(clientDataJSON)</code>), and verifies the signature against the stored public key.</p>
+                        <button class="btn-primary" data-action="auth-3" disabled>Verify signature</button>
+                        <div class="demo-output" data-output></div>
+                    </div>
+                </li>
+
+            </ol>
+        </section>
+
+        <div class="demo-footer">
+            <button id="demo-reset" class="btn-secondary">Reset walkthrough</button>
+        </div>
+    </div>
+
+    <script src="demo.js"></script>
+</body>
+</html>

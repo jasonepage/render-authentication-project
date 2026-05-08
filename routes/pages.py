@@ -30,6 +30,11 @@ def serve_admin():
     return render_template("admin.html")
 
 
+@pages_bp.route("/demo")
+def serve_demo():
+    return render_template("demo.html")
+
+
 @pages_bp.route("/<path:path>")
 def serve_static(path):
     try:
